@@ -65,45 +65,47 @@ GetGenomeAnno <- function(annots = c('hg19_basicgenes', 'hg19_genes_intergenic',
   return(annoFileCollapsed)
 }
 
-GetCountMatrixHTseq <- function(countsDF, meta = Metadata, 
+GetCountMatrixHTseq <- function(countsDF, meta = Metadata, MetaSamleCol = "activemotif_id", countSampleRegEx = "^X", 
                                 MetaCol = c("activemotif_id", "SampleID",  "rin", "condition", "sex", "age", "batch", "pm_hours", "library_size", 
                                             grep("Genes", names(Metadata), value = T), 
                                             "h3k27_gapdh", "h3k27_h3", "H3K27gapdh", "H3K27gapdh_Norm"),
                                 HouseKeepRegEx = "^GAPDH_|^ACTB_|^UBC_",
                                 OtherNormRegEx = NULL){
   names(countsDF)[1] <- "PeakName"
-  ReadsPerChr <- sapply(grep("^X", names(countsDF), value = T), function(Subj){
+  #Remove counts mapped to contig sequences
+  ChrmRM <- countsDF[grepl("GL|hs", countsDF$CHR),] %>% .$CHR %>% as.character %>% unique
+  countsDF %<>% filter(!CHR %in% ChrmRM)
+  
+  ReadsPerChr <- sapply(grep(countSampleRegEx, names(countsDF), value = T), function(Subj){
     subData <- countsDF %>% select(c("CHR", "START", "END", Subj))
     subData %<>% mutate(PeakLength = END-START)
     names(subData)[grepl(Subj, names(subData))] <- "Counts"
     subData %>% group_by(CHR) %>%
       summarise(numPeak = n(), SumReads = sum(Counts),
                 MeanLength = mean(PeakLength), MaxLength = max(PeakLength)) %>%
-      mutate(activemotif_id = as.integer(gsub("X", "", Subj)))
+      mutate(GSM = Subj)
   }, simplify = F) %>% rbindlist()
   
-  ReadsPerChr <- merge(ReadsPerChr, meta %>% select(MetaCol), by = "activemotif_id")
-  ReadsPerChr$CHR <- factor(ReadsPerChr$CHR, levels = c(as.character(c(1:22)), "X", "Y", grep("GL|hs", unique(ReadsPerChr$CHR), value = T)))
+  ReadsPerChr <- merge(ReadsPerChr, meta %>% select(MetaCol), by = MetaSamleCol)
+  ReadsPerChr$CHR <- factor(ReadsPerChr$CHR, levels = c(as.character(c(1:22)), "X", "Y"))
   
-  TotalSampleRead <- ReadsPerChr %>%  group_by(activemotif_id) %>% summarise(TotalCount = sum(SumReads)) %>% data.frame
-  TotalSampleRead <- merge(TotalSampleRead, Metadata %>% select(MetaCol), by = "activemotif_id")
+  TotalSampleRead <- ReadsPerChr %>%  group_by(.dots = MetaSamleCol) %>% summarise(TotalCount = sum(SumReads)) %>% data.frame
+  TotalSampleRead <- merge(TotalSampleRead, Metadata %>% select(MetaCol), by = MetaSamleCol)
   
-  TotalSampleRead %<>% mutate(FRiP = TotalCount/library_size,
-                              Background = library_size - TotalCount)  
+  # TotalSampleRead %<>% mutate(FRiP = TotalCount/library_size,
+  #                             Background = library_size - TotalCount)  
+  
   #Get normalization factor
-  MedianTotalLibrarySize = median(TotalSampleRead$library_size, na.rm = T)
-  MedianRiP = median(TotalSampleRead$TotalCount, na.rm = T)
-  MedianBackground = median(TotalSampleRead$Background, na.rm = T)
+  # MedianTotalLibrarySize = median(TotalSampleRead$library_size, na.rm = T)
+  #MedianRiP = median(TotalSampleRead$TotalCount, na.rm = T)
+  #MedianBackground = median(TotalSampleRead$Background, na.rm = T)
   
-  TotalSampleRead %<>% mutate(NormFactAll = library_size/MedianTotalLibrarySize,
-                              RiP_NormAllCount  = TotalCount/NormFactAll,
-                              NormFactBackground = Background/MedianBackground,
-                              RiP_NormBackground = TotalCount/NormFactBackground)
+  # TotalSampleRead %<>% mutate(NormFactAll = library_size/MedianTotalLibrarySize,
+  #                             RiP_NormAllCount  = TotalCount/NormFactAll,
+  #                             NormFactBackground = Background/MedianBackground,
+  #                             RiP_NormBackground = TotalCount/NormFactBackground)
   
   
-  #Remove counts mapped to contig sequences
-  ChrmRM <- countsDF[grepl("GL|hs", countsDF$CHR),] %>% .$CHR %>% as.character %>% unique
-  countsDF %<>% filter(!CHR %in% ChrmRM)
   
   # Annotate the peaks
   PeakLocation <- countsDF %>% select(CHR, START, END, PeakName) %>% as(., "GRanges")
@@ -118,11 +120,11 @@ GetCountMatrixHTseq <- function(countsDF, meta = Metadata,
   PeakAnnoFile %<>% mutate(Peak.Location = paste0(Peak.CHR, ":", Peak.START, "-", Peak.END))
   
   
-  countsMatrix <- as.matrix(countsDF %>% select(matches("^X")))
+  countsMatrix <- as.matrix(countsDF %>% select(matches(countSampleRegEx)))
   
   rownames(countsMatrix) <- countsDF$PeakName %>% as.character
   
-  countsMatrixAnnot <- merge(PeakAnnoFile, countsMatrix, by.x = "PeakName", by.y = "row.names", all.x = F, all.y = "T")
+  countsMatrixAnnot <- merge(PeakAnnoFile, countsMatrix, by.x = "PeakName", by.y = "row.names", all.x = F, all.y = T)
   
   # Get the peaks annotated to house keeping genes
   if(is.null(OtherNormRegEx)){
@@ -130,19 +132,19 @@ GetCountMatrixHTseq <- function(countsDF, meta = Metadata,
   } else {
     HouseKeeping <- countsMatrixAnnot %>% .[grepl(paste0(HouseKeepRegEx, "|", OtherNormRegEx), .$GeneAnnoType),]
   }
-  HouseKeeping$Mean <- apply(HouseKeeping %>% select(matches("^X")), 1, mean)
+  HouseKeeping$Mean <- apply(HouseKeeping %>% select(matches(countSampleRegEx)), 1, mean)
   HouseKeeping %<>% filter(!duplicated(.$PeakName), Mean > 150) 
   
   # Get the ratio to the mean count for the house keeping genes
   HouseKeepingRatio <- sapply(HouseKeeping$PeakName, function(Peak){
     PeakData <- HouseKeeping %>% filter(PeakName == Peak)
-    temp <- PeakData %>% select(matches("^X")) %>% unlist
+    temp <- PeakData %>% select(matches(countSampleRegEx)) %>% unlist
     temp/PeakData$Mean
   }) %>% data.frame
   
   names(HouseKeepingRatio) <- HouseKeeping$PeakName
   names(HouseKeepingRatio) <- paste0(HouseKeeping$symbol,
-                                     sapply(names(HouseKeepingRatio), function(x) gsub("Peak", "_", x)))
+                                     sapply(names(HouseKeepingRatio), function(x) gsub("(.*)?Peak", "_", x ,ignore.case = T)))
   
   # Get the mean ratio of the house keeping genes
   HouseKeepingRatio$MeanRatioOrg <- apply(HouseKeepingRatio[,grepl(HouseKeepRegEx, names(HouseKeepingRatio))], 1, mean)
@@ -150,17 +152,17 @@ GetCountMatrixHTseq <- function(countsDF, meta = Metadata,
   
   HouseKeepingRatio$SampleName <- rownames(HouseKeepingRatio)
   
-  HouseKeepingRatio$activemotif_id <- sapply(HouseKeepingRatio$SampleName, function(x){
+
+  HouseKeepingRatio[[MetaSamleCol]]<- sapply(HouseKeepingRatio$SampleName, function(x){
     gsub("X", "", x)}
   )
   
-  SampleInfo = merge(TotalSampleRead, HouseKeepingRatio, by = "activemotif_id")
+  SampleInfo = merge(TotalSampleRead, HouseKeepingRatio, by = MetaSamleCol)
   SampleInfo %<>% mutate(RiP_NormMeanRatioOrg = TotalCount/MeanRatioOrg,
                          RiP_NormMeanRatioAll = TotalCount/MeanRatioAll)
   
-  HouseKeepingRatioPlot <- merge(HouseKeepingRatio, TotalSampleRead %>% select(activemotif_id, NormFactAll, TotalCount,
-                                                                               NormFactBackground), by = "activemotif_id")
-  MeasureCor <- cor(HouseKeepingRatioPlot %>% select(-matches("id|Sample")), method = "spearman")
+  HouseKeepingRatioPlot <- merge(HouseKeepingRatio, TotalSampleRead %>% select(c(MetaSamleCol, "TotalCount")), by = MetaSamleCol)
+  MeasureCor <- cor(HouseKeepingRatioPlot %>% select(-matches("id|Sample|GSM")), method = "spearman")
   diag(MeasureCor) <- NA
   
   pheatmap(MeasureCor, angle_col = 90, na_col = "white", display_numbers = T)
@@ -170,12 +172,12 @@ GetCountMatrixHTseq <- function(countsDF, meta = Metadata,
               MeasureCor = MeasureCor))
 }
 
-GetCollapsedMatrix <- function(countsMatrixAnnot, collapseBy, FilterBy, meta = Metadata, normCol = NULL, title = NULL, samples = "All", CorMethod = "pearson"){
+GetCollapsedMatrix <- function(countsMatrixAnnot, collapseBy, FilterBy, meta = Metadata, normCol = NULL, title = NULL, samples = "All", CorMethod = "pearson", countSampleRegEx = "^X", MetaSamleCol = "activemotif_id", MetaSamleIDCol = "SampleID", groupCol = "condition"){
   if(is.null(title)){
     title = paste0("Sample correlation (", FilterBy, ")")
   }
   
-  Data <- countsMatrixAnnot %>% select(matches(paste0(collapseBy, "|^X"))) %>% group_by(.dots = collapseBy) %>% summarise_if(is.numeric, sum, na.rm = TRUE) %>% data.frame
+  Data <- countsMatrixAnnot %>% select(matches(paste0(collapseBy, "|", countSampleRegEx))) %>% group_by(.dots = collapseBy) %>% summarise_if(is.numeric, sum, na.rm = TRUE) %>% data.frame
   names(Data)[grepl(collapseBy, names(Data))] <- "PeakName"
   subData <- Data[grepl(FilterBy, Data$PeakName),]
   rownames(subData) <- subData$PeakName
@@ -200,25 +202,34 @@ GetCollapsedMatrix <- function(countsMatrixAnnot, collapseBy, FilterBy, meta = M
   diag(SampleCor) <- NA
   MedianCor <- apply(SampleCor, 1, function(x) median(x, na.rm = T))
   annoRow = data.frame(#RIN = meta$rin,
-                       Age = meta$age,
-                       Batch = meta$batch,
-                       Sex = meta$sex, row.names = meta$SampleID)
-  annoCol = data.frame(Group = meta$condition,
+                       Age = meta$Age,
+                       #Batch = meta$batch,
+                       Sex = meta$Sex,
+                       row.names = meta[[MetaSamleIDCol]])
+  annoCol = data.frame(Group = meta[[groupCol]],
                        OligoMSP = meta$Oligo_MSP,
+                       CETs = meta$CETS,
+                       ENO2 = meta$Eno2,
+                       MicrogliaMSP = meta$Microglia_MSP,
+                       NeuNall_MSP = meta$NeuNall_MSP,
                        #OligoMSPNorm = meta$Oligo_MSP/meta$MeanRatioOrg,
-                       row.names = meta$SampleID)
-  annoColors = list(Group = c(Cont = "dodgerblue4" , PD = "chocolate1"),
-                    Batch = c(A = "cornflowerblue", B = "darkolivegreen1", C = "chartreuse4",
-                              D = "darkgoldenrod1", E = "brown1", F = "blueviolet", G = "cadetblue1",   H = "deeppink")[c("A", "B", "C", "D", "E", "F", "G", "H") %in% unique(meta$batch)],
+                       row.names = meta[[MetaSamleIDCol]])
+  annoColors = list(Group = c(C = "dodgerblue4" , AD = "chocolate1"),
+                    # Batch = c(A = "cornflowerblue", B = "darkolivegreen1", C = "chartreuse4",
+                    #           D = "darkgoldenrod1", E = "brown1", F = "blueviolet", G = "cadetblue1",   H = "deeppink")[c("A", "B", "C", "D", "E", "F", "G", "H") %in% unique(meta$batch)],
                     Sex = c(F = "indianred4", M = "cornflowerblue"),
                     #RIN = c("yellow", "black"),
                     Age = c("darkseagreen1", "darkorchid4"),
                     #OligoMSPNorm = c("blue4", "cornsilk","chocolate1")
-                    OligoMSP = c("chartreuse4","gray97","maroon"))
+                    OligoMSP = c("chartreuse4","gray97","maroon"),
+                    CETs = c("chartreuse4","gray97","maroon"),
+                    ENO2 = c("chartreuse4","gray97","maroon"),
+                    MicrogliaMSP = c("chartreuse4","gray97","maroon"),
+                    NeuNall_MSP = c("chartreuse4","gray97","maroon"))
   Plot <- pheatmap(SampleCor, angle_col = 90, na_col = "white",border_color = NA,
                    color = colorRampPalette(c("darkblue", "gold2"))(999),
-                   labels_row = meta$activemotif_id,
-                   labels_col = meta$activemotif_id,
+                   labels_row = meta[[MetaSamleCol]],
+                   labels_col = meta[[MetaSamleCol]],
                    annotation_col = annoCol,
                    annotation_row = annoRow,
                    annotation_colors = annoColors,
@@ -241,12 +252,12 @@ GetCellularProportions <- function(Metadata, normCol = NULL){
   #Get relative cell proportion for the samples based on differential NeuN positive and negative cell H3K27ac peaks  
   HTseqCountsSamples <- read.table(CellTypePeakCountLoc, header = T, sep = "\t")
   names(HTseqCountsSamples) <- sapply(names(HTseqCountsSamples), function(x){
-    x = gsub(".data.parkome.chipseq.results.bamfiles.0?", "", x)
+    x = gsub(".*bamfiles.0?", "", x)
     strsplit(x,"_")[[1]][1]
   })
   HTseqCountsSamples$NeuronFC <- CellTypePeaks$log2FoldChange[match(HTseqCountsSamples$Geneid, CellTypePeaks$PeakName)]
   
-  counMatrixSamples <- HTseqCountsSamples %>% select(paste0("X", as.character(Metadata$activemotif_id))) %>% as.matrix()
+  counMatrixSamples <- HTseqCountsSamples %>% select(as.character(Metadata$GSM)) %>% as.matrix()
   rownames(counMatrixSamples) <- as.character(HTseqCountsSamples$Geneid)
   
   if(!is.null(normCol)){
@@ -372,13 +383,13 @@ GetCellularProportions <- function(Metadata, normCol = NULL){
   
   Metadata$NeuronProp <- rescale(to = c(0,1), x = CellTypePCA$x[,1])
   
-  Metadata <- merge(Metadata, MSP_out, by.x = "activemotif_id", by.y = "Sample")
+  Metadata <- merge(Metadata, MSP_out, by.x = "GSM", by.y = "Sample")
   return(Metadata)
 }
 
-RunDESeq <- function(data, meta, normFactor=NULL, sampleToFilter = "none",  FullModel, ReducedModel = "~1", test = "Wald", UseModelMatrix = FALSE, FitType = "parametric"){
-  meta = meta[!grepl(sampleToFilter, meta$activemotif_id),] %>% droplevels
-  data = data[,as.character(meta$SampleName)]
+RunDESeq <- function(data, meta, normFactor=NULL, sampleToFilter = "none",  FullModel, ReducedModel = "~1", test = "Wald", UseModelMatrix = FALSE, FitType = "parametric", MetaSamleCol = "activemotif_id", SampleNameCol = "SampleName"){
+  meta = meta[!grepl(sampleToFilter, meta[[MetaSamleCol]]),] %>% droplevels
+  data = data[,as.character(meta[[SampleNameCol]])]
   
   DESeqDS <- DESeqDataSetFromMatrix(countData = data, colData = meta, design = FullModel)
   

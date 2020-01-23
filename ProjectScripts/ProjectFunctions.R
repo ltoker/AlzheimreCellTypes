@@ -201,17 +201,19 @@ GetCollapsedMatrix <- function(countsMatrixAnnot, collapseBy, FilterBy, meta = M
   SampleCor <- cor(CPMdata, method = CorMethod)
   diag(SampleCor) <- NA
   MedianCor <- apply(SampleCor, 1, function(x) median(x, na.rm = T))
-  annoRow = data.frame(#RIN = meta$rin,
+  annoRow = data.frame(Group = meta[[groupCol]],
+                       #RIN = meta$rin,
                        Age = meta$Age,
                        #Batch = meta$batch,
                        Sex = meta$Sex,
                        row.names = meta[[MetaSamleIDCol]])
   annoCol = data.frame(Group = meta[[groupCol]],
-                       OligoMSP = meta$Oligo_MSP,
                        CETs = meta$CETS,
                        ENO2 = meta$Eno2,
-                       MicrogliaMSP = meta$Microglia_MSP,
                        NeuNall_MSP = meta$NeuNall_MSP,
+                       OligoMSP = meta$Oligo_MSP,
+                       AstrocyteMSP = meta$Astrocyte_MSP,
+                       MicrogliaMSP = meta$Microglia_MSP,
                        #OligoMSPNorm = meta$Oligo_MSP/meta$MeanRatioOrg,
                        row.names = meta[[MetaSamleIDCol]])
   annoColors = list(Group = c(C = "dodgerblue4" , AD = "chocolate1"),
@@ -225,7 +227,8 @@ GetCollapsedMatrix <- function(countsMatrixAnnot, collapseBy, FilterBy, meta = M
                     CETs = c("chartreuse4","gray97","maroon"),
                     ENO2 = c("chartreuse4","gray97","maroon"),
                     MicrogliaMSP = c("chartreuse4","gray97","maroon"),
-                    NeuNall_MSP = c("chartreuse4","gray97","maroon"))
+                    NeuNall_MSP = c("chartreuse4","gray97","maroon"),
+                    AstrocyteMSP = c("chartreuse4","gray97","maroon"))
   Plot <- pheatmap(SampleCor, angle_col = 90, na_col = "white",border_color = NA,
                    color = colorRampPalette(c("darkblue", "gold2"))(999),
                    labels_row = meta[[MetaSamleCol]],

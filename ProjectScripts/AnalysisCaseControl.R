@@ -2,233 +2,106 @@ source("generalFunc.R")
 source("ProjectScripts/ProjectFunctions.R")
 plotMA = DESeq2::plotMA
 packageF("org.Hs.eg.db")
+packageF("tabulizer")
+packageF("limma")
+packageF("edgeR")
 
-
+ResultsPath = "Results"
 if(!ResultsPath %in% list.dirs(full.names = F, recursive = F)){
   dir.create(ResultsPath)
 }
 ResultsPath = paste0(ResultsPath, "/")
 
-load("meta/Metadata.Rda")
 
-Metadata %<>% SampleFilter
+CellTypePeakCountLoc = "Data/marzi_counts.tsv"
+CountMatrixLoc = "Data/MarziPaperCounts.tsv"
+Cohort = "Marzi"
 
-Metadata %<>% mutate(SampleID = paste0("X", activemotif_id))
-Metadata$RNAseq <- sapply(Metadata$sample_id_rna, function(x){
-  if(is.na(x)){
-    "No"
-    } else {
-      "Yes"
-      }
-  }) %>% factor(levels = c("Yes", "No"))
-
-#Filter only the relevant samples
-MetaChipSeq %<>% filter(SampleID %in% Metadata$activemotif_id) %>% droplevels()
-
-annoFileCollapsed <- GetGenomeAnno(genome = "hg19")
-
-
-################## Update ChIP Metadata with file locations  ##############################################
-
-MetaChipSeqGroupCalled <- MetaChipSeq
-MetaChipSeqGroupCalled$Peaks[grepl("Case", MetaChipSeqGroupCalled$Condition)] <- CasePeakLoc
-MetaChipSeqGroupCalled$Peaks[grepl("Control", MetaChipSeqGroupCalled$Condition)] <- ControlPeakLoc
-
-MetaChipSeqAllcalled <- MetaChipSeq
-
-MetaChipSeqAllcalled$Peaks <- CombinedPeakLoc
-
-###################### Analysis of peaks called based on grouped samples##############
-SampleGroup <- Metadata %>% group_by(condition) %>% summarise(n = n()) %>% data.frame()
-
-InputPeakGroupCalled <- list()
-
-InputPeakGroupCalled$PeakData <- as.list(unique(MetaChipSeqGroupCalled$Peaks))
-names(InputPeakGroupCalled$PeakData) <- unique(MetaChipSeqGroupCalled$Condition) %>% as.character
-names(InputPeakGroupCalled$PeakData) <- sapply(names(InputPeakGroupCalled$PeakData), function(x){
-  if(x == "Case"){
-    "PD"
-  } else if(x == "Control"){
-    "Cont"
+MetadataSup <- extract_tables("/Home/siv31/lto092/Downloads/41593_2018_253_MOESM1_ESM.pdf", pages = c(27:30)) %>% lapply(data.frame) %>% rbindlist() #Reading the metadata from the supplementary table 
+names(MetadataSup) <- c("SampleID", "Group", "BraakStage", "Age", "Sex", "NeuralProportion", "PMI", "Experiment")
+MetadataSup <- MetadataSup[-c(1:3),]
+MetadataSup$AgeNumeric <- as.numeric(as.character(MetadataSup$Age))
+MetadataSup$PMINumeric <- as.numeric(as.character(MetadataSup$PMI))
+MetadataSup$NeuralProportionNumeric <- sapply(MetadataSup$NeuralProportion, function(x){
+  if(grepl("%", x)){
+    x = gsub("%", "", x) %>% as.character() %>% as.numeric()
+    x/100
+  } else {
+    NA
   }
 })
 
-InputPeakGroupCalled$PeakData <- mclapply(InputPeakGroupCalled$PeakData, function(grp){
-  temp <- read.table(grp, header = F, sep = "\t")
-  names(temp) <- c("CHR", "START", "END", "PeakName", "Score", "Srand", "Enrichment", "pPvalue", "pQvalue", "OffsetFromStart")[1:ncol(temp)]
-  temp$CHR <- sapply(as.character(temp$CHR), function(x) paste0("chr", x))
-  temp <- temp[!grepl("GL|hs", temp$CHR),] %>% droplevels()
-  temp %<>% mutate(pValue = 10^(-pPvalue)) %>% filter(pValue < 10^(-7))
-  temp %>% arrange(CHR, START) %>% as(.,"GRanges")
-}, mc.cores = detectCores()) 
+#Getting additional metadata
+softDown("GSE102538", file = "Data/GSE102538.soft")
+Metadata <- ReadSoft("Data/GSE102538.soft") %>% select(-matches("antib|Sample_source|Sample_platform|orga")) %>% data.frame()
+names(Metadata) <- c("GSM", "SampleName", "Group", "Age", "Sex", "CETS")
+Metadata$Age <- as.numeric(as.character(Metadata$Age))
+Metadata$CETS <- as.numeric(as.character(Metadata$CETS))
 
-GroupPeakOverlap <- findOverlaps(InputPeakGroupCalled$PeakData$PD, InputPeakGroupCalled$PeakData$Cont)
-InputPeakGroupCalled$UniquePeaks <- list(PD = InputPeakGroupCalled$PeakData$PD[-queryHits(GroupPeakOverlap)],
-                                         Cont = InputPeakGroupCalled$PeakData$Cont[-subjectHits(GroupPeakOverlap)])
-InputPeakGroupCalled$UniquePeaks <- lapply(InputPeakGroupCalled$UniquePeaks, function(grp){
-  PeakAnnoFile <- mergeByOverlaps(annoFileCollapsed, grp, maxgap = 0, type = "any", select = "all") %>% data.frame()
-  names(PeakAnnoFile)[1:4] <- c("Region.CHR", "Region.START", "Region.END", "Region.width")
-  PeakAnnoFile %<>% select(-matches("strand|_id|^id|^PeakName|annoFileCollapsed|offset", ignore.case = T))
-  names(PeakAnnoFile) <- sapply(names(PeakAnnoFile), function(x) gsub("grp", "Peak", x))
-  names(PeakAnnoFile)[grepl("PeakName", names(PeakAnnoFile))] <- "PeakName"
-  PeakAnnoFile %>% mutate(Peak.Location = paste0(Peak.seqnames, ":", Peak.start, "-", Peak.end)) %>% data.frame
-})
+Metadata %<>% arrange(CETS)
+Metadata$Eno2 <- c(0.65, 0.99, 0.56, 0.48, 0.56, 0.55, 0.69, 0.26, 1.27, 0.88,
+                      0.42, 0.51, 2.07, 0.84, 0.52, 1.30, 0.90, 0.80, 0.19, 1.16,
+                      0.34, 0.69, 0.34, 0.77, 1.43, 0.72, 0.33, 0.36, 0.29, 0.59,
+                      0.42, 0.83, 0.49, 1.53, 0.98, 1.31, 0.85, 1.61, 0.65, 1.11,
+                      0.72, 1.26, 0.80, 0.48,  2.28, 1.17, NA)
+Metadata$deltaCTEno2 <- sapply(Metadata$Eno2, function(x){
+  if(!is.na(x)){
+    -log2(x) 
+  } else {
+    NA
+  }
+}) 
 
-
-InputPeakGroupCalled$CommonPeaks <- list(PD = InputPeakGroupCalled$PeakData$PD[queryHits(GroupPeakOverlap)] %>% data.frame() %>% filter(!duplicated(.$PeakName)) %>% as(., "GRanges"),
-                                         Cont = InputPeakGroupCalled$PeakData$Cont[subjectHits(GroupPeakOverlap)] %>% data.frame() %>% filter(!duplicated(.$PeakName))  %>% as(., "GRanges"))
-InputPeakGroupCalled$CommonPeaks <- lapply(InputPeakGroupCalled$CommonPeaks, function(grp){
-  PeakAnnoFile <- mergeByOverlaps(annoFileCollapsed, grp, maxgap = 0, type = "any", select = "all") %>% data.frame()
-  names(PeakAnnoFile)[1:4] <- c("Region.CHR", "Region.START", "Region.END", "Region.width")
-  PeakAnnoFile %<>% select(-matches("strand|_id|^id|^PeakName|annoFileCollapsed|offset", ignore.case = T))
-  names(PeakAnnoFile) <- sapply(names(PeakAnnoFile), function(x) gsub("grp", "Peak", x))
-  names(PeakAnnoFile)[grepl("PeakName", names(PeakAnnoFile))] <- "PeakName"
-  PeakAnnoFile %>% mutate(Peak.Location = paste0(Peak.seqnames, ":", Peak.start, "-", Peak.end)) %>% data.frame
-})
-
-pPvalueDF <- sapply(c("CommonPeaks", "UniquePeaks"), function(peakType){
-  sapply(c("Cont", "PD"), function(Group){
-    data.frame(pPvalue = InputPeakGroupCalled[[peakType]][[Group]] %>%
-                 filter(!duplicated(PeakName), Peak.pValue > 0) %>% .$pPvalue,
-               PeakTypeName = paste0(gsub("Peaks", "", peakType), Group),
-               PeakType = peakType,
-               Group = Group)
-  }, simplify = F) %>% do.call(rbind,.)
-}, simplify = F) %>% do.call(rbind,.)   
-
-Plot <- ggplot(pPvalueDF, aes(PeakTypeName, pPvalue)) +
-  theme_classic() +
-  labs(x = "", y = "-log10(p-value)") +
-  geom_violin(width = 0.8, draw_quantiles = c(0.25, 0.5, 0.75), aes(fill = Group, color = PeakType), alpha = 0.6, scale = "width") +
-  #geom_boxplot(outlier.shape = NA, aes(fill = Group, color = PeakType), alpha = 0.6) +
-  scale_fill_manual(values = c("dodgerblue4", "chocolate1"), name = "Group") +
-  scale_color_manual(values = c("black", "firebrick1"))
-ggsave(paste0(ResultsPath,"PeakPvalueDist", Cohort, ".pdf"), plot = Plot,device = "pdf", width = 10, height = 6, dpi = 300)  
-closeDev()  
-
-GroupGenomeAnnoDF <- data.frame(GenomeAnno = unique(annoFileCollapsed$type))
-CommonCont = table(InputPeakGroupCalled$CommonPeaks$Cont$type)[as.character(GroupGenomeAnnoDF$GenomeAnno)]
-UniqueCont = table(InputPeakGroupCalled$UniquePeaks$Cont$type)[as.character(GroupGenomeAnnoDF$GenomeAnno)]                                                   
-CommonPD = table(InputPeakGroupCalled$CommonPeaks$PD$type)[as.character(GroupGenomeAnnoDF$GenomeAnno)]
-UniquePD = table(InputPeakGroupCalled$UniquePeaks$PD$type)[as.character(GroupGenomeAnnoDF$GenomeAnno)]  
-GroupGenomeAnnoDF %<>% mutate(CommonCont = signif(100*CommonCont/nrow(InputPeakGroupCalled$CommonPeaks$Cont), digits = 2) %>% as.vector,
-                              UniqueCont = signif(100*UniqueCont/nrow(InputPeakGroupCalled$UniquePeaks$Cont), digits = 2) %>% as.vector,
-                              CommonPD = signif(100*CommonPD/nrow(InputPeakGroupCalled$CommonPeaks$PD), digits = 2) %>% as.vector,
-                              UniquePD = signif(100*UniquePD/nrow(InputPeakGroupCalled$UniquePeaks$PD), digits = 2) %>% as.vector) %>% arrange(CommonCont)
-
-GroupGenomeAnnoDF$GenomeAnno <- sapply(as.character(GroupGenomeAnnoDF$GenomeAnno), function(x) gsub("hg19_genes_", "", x))
-GroupGenomeAnnoMelt <- gather(GroupGenomeAnnoDF, key = "PeakType", value = "Percent", -GenomeAnno)
-GroupGenomeAnnoMelt$GenomeAnno <- factor(GroupGenomeAnnoMelt$GenomeAnno, levels = rev(c("intergenic", "introns", "1to5kb",  "3UTRs", "5UTRs", "intronexonboundaries", "exons", "promoters")))                                                           
-Plot <- ggplot(GroupGenomeAnnoMelt, aes(PeakType, Percent, fill = GenomeAnno)) +
-  theme_classic(base_size = 14) +
-  labs(x = "", y = "Annotations (%)") +
-  scale_fill_manual(values = c("firebrick1", "darkorange1", "gold", "chartreuse3" ,"chartreuse4", "cyan", "blue4", "magenta3"), name = "Genomic annottation") +
-  geom_bar(stat = "identity") 
-ggsave(paste0(ResultsPath,"GenomAnnoUniquePeaks", Cohort, ".pdf"), plot = Plot,device = "pdf", width = 10, height = 6, dpi = 300)
-closeDev()
-
-Conditions = names(InputPeakGroupCalled$PeakData)
-
-InputPeakGroupCalled$GroupStat <- data.frame(Condition = Conditions,
-                                             TotalPeaksInGroup = lapply(InputPeakGroupCalled$PeakData, function(grp){
-                                               grp %>% data.frame %>% nrow
-                                             }) %>% unlist,
-                                             TotalCoverage = lapply(InputPeakGroupCalled$PeakData, function(grp){
-                                               grp %>% data.frame %>% .$width %>% sum
-                                             }) %>% unlist,
-                                             CommonPeaks = lapply(InputPeakGroupCalled$CommonPeaks, function(grp){
-                                               grp %>% data.frame %>% filter(!duplicated(.$PeakName)) %>% nrow
-                                             }) %>% unlist,
-                                             UniquePeaks = lapply(InputPeakGroupCalled$UniquePeaks, function(grp){
-                                               grp %>% data.frame %>% filter(!duplicated(.$PeakName)) %>% nrow
-                                             }) %>% unlist)
-
-                                               
-InputPeakGroupCalled$GroupStat %<>% mutate(UniquePeakGroupPercent = signif(100*UniquePeaks/TotalPeaksInGroup, digits = 3),
-                                           TotalCovPercent = signif(100*TotalCoverage/(2.7*10^9), digits = 3))
-write.table(InputPeakGroupCalled$GroupStat, paste0(ResultsPath,"PeakStatGroupComparison-PeakData", Cohort, ".tsv"), row.names = F, col.names = T, sep = "\t")
-DataToPlot <- InputPeakGroupCalled$GroupStat %>% select(Condition, TotalPeaksInGroup,
-                                                        UniquePeakGroupPercent, TotalCovPercent) %>%
-  gather(key = "Measure", value = "Value", -Condition)
-DataToPlot$Measure <- factor(DataToPlot$Measure, levels = c("TotalPeaksInGroup", "UniquePeakGroupPercent", "TotalCovPercent"))
-levels(DataToPlot$Measure) <- c("TotalPeaks", "UniquePeaks (%)", "GenomeCoverage (%)")
-
-Plot <- ggplot(DataToPlot, aes(Condition, Value, fill = Condition)) +
-  theme_classic(base_size = 16) +
-  labs(x = "", y = "") +
-  geom_bar(stat = "identity") +
-  scale_fill_manual(values = c("dodgerblue4", "chocolate1"), name = "Group") +
-  facet_wrap(~Measure, nrow = 1, scales = "free")
-ggsave(paste0("GroupPeaksDifference", Cohort, ".pdf"), plot = Plot, device = "pdf", width = 10, height = 4, dpi = 300, useDingbats = F, path = ResultsPath)
-closeDev()
-################ Repeat for peaks called on all samples combined ############
-
-InputPeakAllCalled <- list()
-InputPeakAllCalled$PeakData <- read.table(CombinedPeakLoc, header = F, sep = "\t")
-names(InputPeakAllCalled$PeakData) <- c("CHR", "START", "END", "PeakName", "Score", "Srand", "Enrichment", "pPvalue", "pQvalue", "OffsetFromStart")[1:ncol(InputPeakAllCalled$PeakData)]
-InputPeakAllCalled$PeakData %<>% mutate(pValue = 10^(-pPvalue)) %>% filter(pValue < 10^(-7))
-InputPeakAllCalled$PeakData <- InputPeakAllCalled$PeakData[!grepl("GL|hs", InputPeakAllCalled$PeakData$CHR),] %>% droplevels()
-InputPeakAllCalled$PeakData %<>% arrange(CHR, START) %>% as(.,"GRanges")
+#Following the steps in Marzi et al.
+Metadata$CETS[is.na(Metadata$CETS)] <- median(Metadata$CETS, na.rm = T)
+Metadata$CETSif <-  cut(Metadata$CETS, breaks=5, ordered_result = T)
+Metadata$Agef <-  cut(Metadata$Age, breaks=5, ordered_result = T)
 
 
+Metadata %<>% arrange(GSM)
+rownames(Metadata) <- Metadata$GSM %>% as.character()
+Metadata$Group <- factor(Metadata$Group, levels = c("C", "AD"))
+##### Add relative cell proportion for based on differential NeuN positive and negative cell H3K27ac peaks ##########  
+Metadata <- GetCellularProportions(Metadata = Metadata)
 
-InputPeakAllCalled$Summary <- data.frame(TotalPeaks = InputPeakAllCalled$PeakData %>% data.frame %>% nrow,
-                                         TotalCoverage = InputPeakAllCalled$PeakData %>% data.frame %>% .$width %>% sum)
-
-InputPeakAllCalled$Summary %<>% mutate(TotalCovPercent = signif(100*TotalCoverage/(2.7*10^9), digits = 3))
-InputPeakAllCalled$PeakData %>% data.frame() %>% .$width %>% summary()                                         
 
 ############################# HTseq counts ######################################################################
+
+annoFileCollapsed <- GetGenomeAnno(genome = "hg19")
+
 HTseqCounts <- read.table(CountMatrixLoc, header = T, sep = "\t")
 
 names(HTseqCounts) <- sapply(names(HTseqCounts), function(x){
-  x = gsub(".data.parkome.chipseq.results.bamfiles.0?", "", x)
+  x = gsub(".*bamfiles.0?", "", x)
   strsplit(x,"_")[[1]][1]
 })
+
+
 HTseqCounts %<>% mutate(Peak.Location = paste0("chr", Chr, ":", Start, "-", End))
 names(HTseqCounts)[2:4] <- c("CHR", "START", "END")
 
 #Arrange the samples to match Metadata order
-HTseqCounts %<>% select(c("Geneid", "CHR", "START", "END", "Strand",  "Length", paste0("X", as.character(Metadata$activemotif_id))))
+HTseqCounts %<>% select(c("Geneid", "CHR", "START", "END", "Strand",  "Length", as.character(Metadata$GSM)))
 
-#Remove peaks in contig regions and peaks with p > 10^-7 (as well as blacklisted peaks)
-HTseqCounts <- HTseqCounts %>% filter(Geneid %in% as.character(InputPeakAllCalled$PeakData$PeakName)) %>% droplevels()
+#Keep peaks with cpm > 1 in at least two samples
+keep <- rowSums(cpm(HTseqCounts %>% select(matches("GSM"))) > 1) >= 2
+HTseqCounts <- HTseqCounts[keep,]
 
-HTseqCounts$MaxCount = apply(HTseqCounts %>% select(matches("^X")), 1, max)
+HTseqCounts$MaxCount = apply(HTseqCounts %>% select(matches("GSM")), 1, max)
 HTseqCounts %<>% mutate(NormalizedMaxCount = MaxCount/Length)  
 
-AllCalledData <- GetCountMatrixHTseq(HTseqCounts, OtherNormRegEx = "^C1orf43_|^CHMP2A_|^EMC7_|^GPI_|^PSMB2_|^PSMB4_|^RAB7A_|^REEP5_|^SNRPD3_|^VCP_|^VPS29")
+
+AllCalledData <- GetCountMatrixHTseq(countsDF = HTseqCounts, meta = Metadata, MetaCol = c("GSM", "SampleName", "Group", "Age", "Agef", "Sex", "CETS", "CETSif", grep("Eno2|MSP", names(Metadata), value = "T")),
+                                     MetaSamleCol = "GSM", countSampleRegEx = "GSM", OtherNormRegEx = "^C1orf43_|^CHMP2A_|^EMC7_|^GPI_|^PSMB2_|^PSMB4_|^RAB7A_|^REEP5_|^SNRPD3_|^VCP_|^VPS29")
+
 closeDev()
-
-##### Get relative cell proportion for based on differential NeuN positive and negative cell H3K27ac peaks ##########  
-AllCalledData$SampleInfo <- GetCellularProportions(AllCalledData$SampleInfo)
-
-pdf(paste0(ResultsPath, "SampleCorPromoter", Cohort, ".pdf"), useDingbats = F, width = 10, height = 8)
-countMatrixPromotersAllCalled  <- GetCollapsedMatrix(countsMatrixAnnot = AllCalledData$countsMatrixAnnot, collapseBy = "GeneAnnoType",CorMethod = "pearson",
-                                                     FilterBy = "promoter", meta = AllCalledData$SampleInfo,
-                                                     title = paste0("Sample correlation (promoter), Peaks - called together, ", Cohort))
-closeDev()
-
-#Detect outliers
-MedianCor <- apply(countMatrixPromotersAllCalled$SampleCor, 1, function(x) median(x, na.rm = TRUE))
-Outlier <- MedianCor[MedianCor < (median(MedianCor) - 1.5*iqr(MedianCor))]
-
-Model = as.formula(" ~ condition + sex + age + batch + pm_hours + Oligo_MSP")
-
-DESeqOutAll_promoters <- RunDESeq(data = countMatrixPromotersAllCalled$countMatrix,UseModelMatrix = T, sampleToFilter = paste(sapply(names(Outlier), function(x) gsub("X", "", x)), collapse = "|"),
-                                  meta = countMatrixPromotersAllCalled$Metadata, normFactor = "MeanRatioOrg",
-                                  FullModel = Model, test = "Wald", FitType = "local")
-
-                                    
-DESegResultsSex_promotersAll <- GetDESeqResults(DESeqOutAll_promoters, coef = "sexM") %>% mutate(symbol = sapply(.$PeakName, function(x) {strsplit(x, "_")[[1]][1]}))
-DESegResultsAge_promotersAll <- GetDESeqResults(DESeqOutAll_promoters, coef = "age") %>% mutate(symbol = sapply(.$PeakName, function(x) {strsplit(x, "_")[[1]][1]}))
-DESegResultsGroup_promotersAll <- GetDESeqResults(DESeqOutAll_promoters, coef = "conditionPD") %>% mutate(symbol = sapply(.$PeakName, function(x) {strsplit(x, "_")[[1]][1]}))
 
 ###########################################################################################################
 ############ RERUN USING PEAKS BASED ON ALL THE SAMPLES, without collapsing peaks #########################
 ###########################################################################################################
 pdf(paste0(ResultsPath, "SampleCorAllPeaks", Cohort, ".pdf"), useDingbats = F, width = 10, height = 8)
-countMatrixFullAllCalled <- GetCollapsedMatrix(countsMatrixAnnot = AllCalledData$countsMatrixAnnot %>% filter(!duplicated(.$PeakName)), collapseBy = "PeakName",CorMethod = "pearson",
+countMatrixFullAllCalled <- GetCollapsedMatrix(countsMatrixAnnot = AllCalledData$countsMatrixAnnot %>% filter(!duplicated(.$PeakName)), collapseBy = "PeakName",MetaSamleCol = "GSM",
+                                               CorMethod = "pearson", countSampleRegEx = "GSM",MetaSamleIDCol = "GSM", groupCol = "Group",
                                                FilterBy = "", meta = AllCalledData$SampleInfo, title = paste0("Sample correlation, ", Cohort))
 closeDev()
 
@@ -244,17 +117,22 @@ VarExplained <- PCAsamples %>% summary() %>% .$importance %>%
 
 
 CovarPvalues <- sapply(grep("^PC", names(countMatrixFullAllCalled$Metadata), value = T), function(PC){
-  temp <- lm(as.formula(paste0(PC, "~ condition + sex + age + batch + pm_hours + rin + Oligo_MSP + MeanRatioOrg + RiP_NormMeanRatioOrg")),
+  temp <- lm(as.formula(paste0(PC, "~ Group + Age + Sex + CETS + NeuNall_MSP + Astrocyte_MSP + Microglia_MSP + Oligo_MSP")),
              data = countMatrixFullAllCalled$Metadata) %>% summary
   temp$coefficients[-1,4]
 }, simplify = F) %>% do.call(cbind, .) %>% data.frame()
 
 names(CovarPvalues) <- paste0(names(CovarPvalues), "(", round(VarExplained, digits = 1), "%)")
 CovarPvalues %<>% mutate(Variable = factor(rownames(CovarPvalues), levels = rownames(CovarPvalues)))
-levels(CovarPvalues$Variable) <- c("Group", "Sex", "Age", grep("batch", levels(CovarPvalues$Variable), value = T), "PMI", "RIN", "Oligo_MSP", "NormalizingFactor", "NormalizedRiP")
 CovarPvaluesMelt <- gather(CovarPvalues, key = "PC", value = "pValue", -Variable)
 CovarPvaluesMelt %<>% mutate(pPvalue = -log10(pValue)) 
-
+CovarPvaluesMelt$Significant <- sapply(CovarPvaluesMelt$pValue, function(x){
+  if(x < 0.05){
+    "Yes"
+  } else {
+    "No"
+  }
+}) %>% factor(levels = c("No", "Yes"))
 
 Plot  <- ggplot(CovarPvaluesMelt, aes(PC, Variable)) +
   theme_classic(base_size = 13) +
@@ -262,177 +140,153 @@ Plot  <- ggplot(CovarPvaluesMelt, aes(PC, Variable)) +
   labs(x = "", y = "", title = "Association of variables with main PCs") +
   geom_tile(aes(fill = pPvalue), colour = "white") +
   scale_fill_gradient(high = "steelblue", low = "gray94", name = "-log10(p)") +
-  geom_text(aes(label = signif(pValue, 2))) 
+  geom_text(aes(label = signif(pValue, 2), colour = Significant), show.legend = F) +
+  scale_color_manual(values = c("black", "red"))
 ggsave(paste0("AssociationWithPCs", Cohort, ".pdf"), plot = Plot, device = "pdf", width = 10, height = 8, dpi = 300, useDingbats = F, path = ResultsPath)
 closeDev()
 
 
-countMatrixDF <- AllCalledData$countsMatrixAnnot %>% filter(!duplicated(.$PeakName)) %>% data.frame %>% select(matches("Peak|^X"))
-countMatrixDF$MedianCount <- apply(countMatrixDF %>% select(matches("^X")), 1, mean)
-countMatrixDF %<>% mutate(NormCount = 200*MedianCount/Peak.width)
-countMatrixDF$baseMean <- apply(countMatrixDF %>% select(matches("^X")), 1, mean)
-
-countMatrix_filtered <- countMatrixDF %>% filter(NormCount > 5) %>% select(matches("^X")) %>% as.matrix()
-rownames(countMatrix_filtered) <- as.character(countMatrixDF %>% filter(NormCount > 5) %>% .$PeakName)
-
-################# Check the best normalization method ###############################
-
-## Calculate normalization factors using RLE
-DEStemp <- DESeqDataSetFromMatrix(countData = countMatrixDF %>% data.frame %>% select(matches("^X")) %>% as.matrix, colData = countMatrixFullAllCalled$Metadata, design = Model)
-DEStemp <-  estimateSizeFactors(DEStemp)
-DEStemp$RiP_RLE <- DEStemp$TotalCount/DEStemp$sizeFactor
-
-MeltedDataAll <- DEStemp@colData %>% data.frame %>% gather(key = "MeasureType", value = "Value", TotalCount, library_size, RiP_NormAllCount, RiP_NormBackground, RiP_RLE, RiP_NormMeanRatioOrg, RiP_NormMeanRatioAll)
-MeltedDataAll$MeasureType <- factor(MeltedDataAll$MeasureType, levels = c("TotalCount", "library_size",  "RiP_NormAllCount", "RiP_NormBackground", "RiP_RLE", "RiP_NormMeanRatioOrg", "RiP_NormMeanRatioAll"))
-levels(MeltedDataAll$MeasureType) <- c("LibrarySize",  "RiP", "RiP/LibrarySize", "RiP/RoP", "RiP/sizeFactor", "RiP/MeanRatio", "RiP/MeanRatio2")
-
-#Add individual vallues
-xLabFun <- function(x) signif(as.numeric(as.character(x)), digits = 2)
-
-StatNormMethod <- sapply(levels(MeltedDataAll$MeasureType), function(Type){
-  data = MeltedDataAll %>% filter(!is.na(H3K27gapdh_Norm), !activemotif_id %in% c("57","39"), MeasureType == Type) %>% droplevels()
-  cor.test(~H3K27gapdh_Norm+Value, data = data)
-}, simplify = F)
-
-MeltedDataAll %<>% mutate(MeasureType2 = MeasureType)
-
-levels(MeltedDataAll$MeasureType2) <- sapply(levels(MeltedDataAll$MeasureType2), function(Type){
-  temp <- StatNormMethod[[Type]]
-  paste0(Type, " (r=", signif(temp$estimate, digits = 2), ", p=",  signif(temp$p.value, digits = 2), ")")
-})
-
-  
-Plot <- ggplot(MeltedDataAll %>% filter(!is.na(H3K27gapdh_Norm), !activemotif_id %in% c("57", "39")), aes(H3K27gapdh_Norm, Value, color = condition)) +
-  theme_bw() +
-  theme(panel.grid = element_blank()) +
-  labs(y = "Counts", x = "WB, H3K27gapdh_normalized (Final)", title = Cohort) +
-  geom_point(alpha = 0.9) +
-  scale_color_manual(values = c("dodgerblue4", "chocolate1"), name = "Group") + 
-  #geom_smooth(method = "lm", color = "black") +
-  scale_y_continuous(labels = xLabFun) +
-  facet_wrap(~MeasureType2, scales = "free_y")
-ggsave(paste0("WB_ChipSeqCor_FinalnormalizedToReplicates", Cohort, ".pdf"), plot = Plot, device = "pdf", width = 10, height = 6, dpi = 300, useDingbats = F, path = ResultsPath)
-closeDev()
-
-
-Plot <- ggplot(MeltedDataAll %>% filter(MeasureType == "RiP/MeanRatio", !activemotif_id %in% c("57", "39")), aes(condition, Value, color = condition)) +
-  theme_bw(base_size = 14) +
-  theme(panel.grid = element_blank()) +
-  labs(x = "", y = "Normalized RiP", title = Cohort) +
-  geom_boxplot(outlier.shape = NA, aes(fill = condition), alpha = 0.4) +
-  geom_jitter(width = 0.2, aes(color = condition)) +
-  scale_color_manual(values = c("dodgerblue4", "chocolate1"), name = "Group") +
-  scale_fill_manual(values = c("dodgerblue4", "chocolate1"), name = "Group") +
-  scale_y_continuous(labels = xLabFun)
-ggsave(paste0("GroupNormRiP", Cohort, ".pdf"), plot = Plot, device = "pdf", width = 10, height = 6, dpi = 300, useDingbats = F, path = ResultsPath)
-closeDev()
-
-Plot <- ggplot(MeltedDataAll %>% filter(MeasureType == "RiP/MeanRatio", !activemotif_id %in% c("57", "39")), aes(condition, H3K27gapdh_Norm, color = condition)) +
-  theme_bw(base_size = 14) +
-  theme(panel.grid = element_blank()) +
-  labs(x = "", y = "WB H3K27ac/GAPDH ", title = Cohort) +
-  geom_boxplot(outlier.shape = NA, aes(fill = condition), alpha = 0.4) +
-  geom_jitter(width = 0.2, aes(color = condition)) +
-  scale_color_manual(values = c("dodgerblue4", "chocolate1"), name = "Group") +
-  scale_fill_manual(values = c("dodgerblue4", "chocolate1"), name = "Group") +
-  scale_y_continuous(labels = xLabFun)
-ggsave(paste0("GroupWB", Cohort, ".pdf"), plot = Plot, device = "pdf", width = 10, height = 6, dpi = 300, useDingbats = F, path = ResultsPath)
-closeDev()
-
-
-Plot <- ggplot(MeltedDataAll %>% filter(MeasureType == "RiP/MeanRatio", !activemotif_id %in% c("57", "39")), aes(age, Value, fill = condition)) +
-  theme_bw(base_size = 14) +
-  theme(panel.grid = element_blank()) +
-  labs(x = "Age", y = "Normalized RiP", title = Cohort) +
-  geom_smooth(method = "lm", aes(fill = condition, color = condition), alpha = 0.3, size = 0.2) +
-  geom_point(size = 2, aes(color = condition)) +
-  scale_fill_manual(values = c("dodgerblue4", "chocolate1"), name = "Group") +
-  scale_color_manual(values = c("dodgerblue4", "chocolate1"), name = "Group") +
-  scale_y_continuous(labels = xLabFun) +
-  facet_wrap(~condition, scales = "free_x")
-ggsave(paste0("AgeRipCorrelation", Cohort, ".pdf"), plot = Plot, device = "pdf", width = 10, height = 6, dpi = 300, useDingbats = F, path = ResultsPath)
-closeDev()
-
-
-#Look at the correlation betweem expression-based and ChIP-seq based cell abundance estimates
-CellData <- countMatrixFullAllCalled$Metadata %>% select(-matches("__|RiP|All|gapdh|Backgr|library|Total|h3")) %>% gather(matches("Genes"), key = "CellTypeMGP", value = "MGP")
-CellData$CellTypeMGP <- sapply(CellData$CellTypeMGP, function(x) gsub("_Genes", "", x))
-CellData %<>% gather(matches("MSP"), key = "CellTypeMSP", value = "MSP")
-CellData$CellTypeMSP <- sapply(CellData$CellTypeMSP, function(x) gsub("_MSP", "", x))
-CellData %<>% filter(CellTypeMGP == CellTypeMSP)
+#Look at the correlation betweem CETS and ChIP-seq based cell abundance estimates
+CellData <- countMatrixFullAllCalled$Metadata %>% select(-matches("__|Total")) %>% gather(matches("MSP"), key = "CellType", value = "MSP") 
+CellData$CellType <- sapply(CellData$CellType, function(x) gsub("_MSP", "", x)) %>% factor()
 CellData %<>% mutate(MSPnorm = MSP/MeanRatioOrg)
 
-#Add information regarding whether or not samples were analyzed in western blot
-WesterAnalized <- c(21, 23, 25, 26, 28, 29, 30, 33, 34, 35, 36, 37, 42, 62)
-CellData$Western <- sapply(CellData$activemotif_id, function(Subj){
-  if(Subj %in% WesterAnalized){
-    "YES"
-    } else {
-      "NO"
-      }
-  })
 
-Plot <- ggplot(CellData %>% filter(!activemotif_id %in% c("57", "39")), aes(condition, MSPnorm, color = condition)) +
+Plot <- ggplot(CellData, aes(Group, MSP, color = Group)) +
   theme_bw(base_size = 14) +
   theme(panel.grid = element_blank()) +
-  geom_boxplot(outlier.shape = NA, aes(fill = condition), alpha = 0.4) +
-  geom_jitter(width = 0.2, aes(color = condition, pch = Western)) +
+  geom_boxplot(outlier.shape = NA, aes(fill = Group), alpha = 0.4) +
+  geom_jitter(width = 0.2, aes(color = Group)) +
   scale_color_manual(values = c("dodgerblue4", "chocolate1"), name = "Group") +
   scale_fill_manual(values = c("dodgerblue4", "chocolate1"), name = "Group") +
   scale_shape_manual(values = c(16, 4)) +
-  facet_wrap(~CellTypeMSP, scales = "free")
+  facet_wrap(~CellType, scales = "free")
 
 ggsave(paste0("CellTypeDifferences", Cohort, ".pdf"), plot = Plot, device = "pdf", width = 10, height = 6, dpi = 300, useDingbats = F, path = ResultsPath)
+closeDev()
+
+CellTypeStats <- sapply(levels(CellData$CellType), function(cellType){
+  Data = CellData %>% filter(CellType == cellType)
+  lm(MSP~Group + Sex + Agef, data = Data) %>% summary
+}, simplify = F)
+
+
+ggplot(CellData %>% filter(CellType == "NeuNall"), aes(Group, MSP, color = Group)) +
+  theme_classic(base_size = 14) +
+  theme(panel.grid = element_blank()) +
+  labs(x = "", y = "Neuronal MSP", title = "MSP analysis enthorinal cortex") +
+  geom_boxplot(outlier.shape = NA, aes(fill = Group), alpha = 0.4) +
+  geom_jitter(width = 0.2, aes(color = Group)) +
+  scale_color_manual(values = c("darkgrey", "darkred"), name = "Group") +
+  scale_fill_manual(values = c("darkgrey", "darkred"), name = "Group") +
+  annotate("text", x = 1.5, y = 1, label = paste0("p = ", signif(CellTypeStats$NeuNall$coefficients[2,4], digits = 2)))
+
+ggsave(paste0("NeuNDifferences", Cohort, ".pdf"), device = "pdf", width = 5, height = 5, dpi = 300, useDingbats = F, path = ResultsPath)
 closeDev()
 
 #Detect outliers
 MedianCor <- apply(countMatrixFullAllCalled$SampleCor, 1, function(x) median(x, na.rm = TRUE))
 Outlier <- MedianCor[MedianCor < (median(MedianCor) - 1.5*iqr(MedianCor))]
 
-#Run the analysis
-DESeqOutAll_Full <- RunDESeq(data = countMatrix_filtered, UseModelMatrix = T, 
-                             meta = countMatrixFullAllCalled$Metadata, normFactor = "MeanRatioOrg", sampleToFilter = paste(sapply(names(Outlier), function(x) gsub("X", "", x)), collapse = "|"),
+
+#Run analyses (repeating the steps in Marzi et al.)
+ddsAD <- DESeqDataSetFromMatrix(countData = countMatrixFullAllCalled$countMatrix, colDat = countMatrixFullAllCalled$Metadata, design = ~Group)
+ddsAD <- estimateSizeFactors(ddsAD)
+
+ADcounts <- counts(ddsAD)
+
+ADcounts<-as.data.frame(ADcounts)
+
+
+ADcountList<-DGEList(counts=ADcounts, group=Metadata$Group)
+ADcountList <- calcNormFactors(ADcountList)
+
+
+MarziModelMatrix <- model.matrix(as.formula("~Agef + CETSif + Group"), data = Metadata)
+
+ADcountList <- estimateDisp(ADcountList, MarziModelMatrix)
+
+fitTMM <- glmQLFit(ADcountList, MarziModelMatrix)
+qlf_group <- glmQLFTest(fitTMM, coef = "GroupAD")
+group_results <- topTags(qlf_group, n = Inf) %>% data.frame() %>% mutate(PeakName = rownames(.))
+
+groupResult_Anno <- group_results %>%
+  AnnotDESeqResult(CountAnnoFile = AllCalledData$countsMatrixAnnot, by.x = "PeakName", by.y = "PeakName") %>% arrange(FDR)
+
+
+#Heatmap of significant peaks
+SignifCETsDF <- groupResult_Anno %>% filter(FDR < 0.05) %>% filter(!duplicated(PeakName)) %>% select(matches("PeakName|logFC|FDR|GSM"))
+SignifCETsMatrix <- SignifCETsDF %>% select(matches("GSM"))
+
+
+pheatmap()
+
+
+#Repeat after accounting for Neuroanl and Microglia MSP
+MarziModelMatrixMSP <- model.matrix(as.formula("~Agef + NeuNall_MSP + Microglia_MSP + Group"), data = countMatrixFullAllCalled$Metadata)
+
+ADcountList2 <- estimateDisp(ADcountList, MarziModelMatrixMSP)
+
+fitTMM_MSP <- glmQLFit(ADcountList2, MarziModelMatrixMSP)
+qlf_groupMSP <- glmQLFTest(fitTMM_MSP, coef = "GroupAD")
+group_resultsMSP<- topTags(qlf_groupMSP, n = Inf) %>% data.frame() %>% mutate(PeakName = rownames(.)) 
+
+
+groupResult_MSPAnno <- group_resultsMSP %>%
+  AnnotDESeqResult(CountAnnoFile = AllCalledData$countsMatrixAnnot, by.x = "PeakName", by.y = "PeakName") %>% arrange(FDR)
+
+SignifCETS <- group_results %>% filter(FDR < 0.05)
+SignifMSP <- group_resultsMSP %>% filter(FDR < 0.05)
+
+UniquePeakMSP <- SignifMSP %>% filter(!PeakName %in% SignifCETS$PeakName)
+UniquePeakMSP <- groupResult_MSPAnno %>% filter(PeakName %in% UniquePeakMSP$PeakName) %>% select(PeakName, logFC, logCPM, PValue, FDR, symbol, Peak_Gene, GeneAnnoType, Peak.width, Peak.Location)
+
+UniquePeakCETS <- SignifCETS %>% filter(!PeakName %in% SignifMSP$PeakName)
+
+#Run the analysis similar to PD pipeline
+Model = as.formula("~Age + NeuNall_MSP + Microglia_MSP + Group")
+DESeqOutAll_Full <- RunDESeq(data = countMatrixFullAllCalled$countMatrix, UseModelMatrix = T, MetaSamleCol = "GSM", SampleNameCol = "GSM", 
+                             meta = countMatrixFullAllCalled$Metadata, normFactor = "MeanRatioOrg", sampleToFilter = "none",
                              FullModel = Model, test = "Wald", FitType = "local")
                                   
 
-DESegResultsSex_FullAll <- GetDESeqResults(DESeqOutAll_Full, coef = "sexM") %>% AnnotDESeqResult(CountAnnoFile = AllCalledData$countsMatrixAnnot, by.x = "PeakName", by.y = "PeakName")
-DESegResultsAge_FullAll <- GetDESeqResults(DESeqOutAll_Full, coef = "age") %>% AnnotDESeqResult(CountAnnoFile = AllCalledData$countsMatrixAnnot, by.x = "PeakName", by.y = "PeakName")
-DESegResultsGroup_FullAll <- GetDESeqResults(DESeqOutAll_Full, coef = "conditionPD") %>% AnnotDESeqResult(CountAnnoFile = AllCalledData$countsMatrixAnnot, by.x = "PeakName", by.y = "PeakName")
+#DESegResultsSex_FullAll <- GetDESeqResults(DESeqOutAll_Full, coef = "SexM") %>% AnnotDESeqResult(CountAnnoFile = AllCalledData$countsMatrixAnnot, by.x = "PeakName", by.y = "PeakName")
+DESegResultsAge_FullAll <- GetDESeqResults(DESeqOutAll_Full, coef = "Age") %>% AnnotDESeqResult(CountAnnoFile = AllCalledData$countsMatrixAnnot, by.x = "PeakName", by.y = "PeakName")
+DESegResultsGroup_FullAll <- GetDESeqResults(DESeqOutAll_Full, coef = "GroupAD") %>% AnnotDESeqResult(CountAnnoFile = AllCalledData$countsMatrixAnnot, by.x = "PeakName", by.y = "PeakName")
 
 
 ## Rerun with RLE normalization
-DESeqOutAll_Full_RLE <- RunDESeq(data = countMatrix_filtered, UseModelMatrix = T, 
-                             meta = countMatrixFullAllCalled$Metadata, normFactor = NULL, sampleToFilter = paste(sapply(names(Outlier), function(x) gsub("X", "", x)), collapse = "|"),
-                             FullModel = Model, test = "Wald", FitType = "local")
+DESeqOutAll_Full_RLE <- RunDESeq(data = countMatrixFullAllCalled$countMatrix, UseModelMatrix = T, MetaSamleCol = "GSM", SampleNameCol = "GSM", 
+                                 meta = countMatrixFullAllCalled$Metadata, normFactor = NULL, sampleToFilter = "none",
+                                 FullModel = Model, test = "Wald", FitType = "local")
+
+#DESegResultsSex_FullAll_RLE <- GetDESeqResults(DESeqOutAll_Full_RLE, coef = "sexM") %>% AnnotDESeqResult(CountAnnoFile = AllCalledData$countsMatrixAnnot, by.x = "PeakName", by.y = "PeakName")
+DESegResultsAge_FullAll_RLE <- GetDESeqResults(DESeqOutAll_Full_RLE, coef = "Age") %>% AnnotDESeqResult(CountAnnoFile = AllCalledData$countsMatrixAnnot, by.x = "PeakName", by.y = "PeakName")
+DESegResultsGroup_FullAll_RLE <- GetDESeqResults(DESeqOutAll_Full_RLE, coef = "GroupAD") %>% AnnotDESeqResult(CountAnnoFile = AllCalledData$countsMatrixAnnot, by.x = "PeakName", by.y = "PeakName")
 
 
-DESegResultsSex_FullAll_RLE <- GetDESeqResults(DESeqOutAll_Full_RLE, coef = "sexM") %>% AnnotDESeqResult(CountAnnoFile = AllCalledData$countsMatrixAnnot, by.x = "PeakName", by.y = "PeakName")
-DESegResultsAge_FullAll_RLE <- GetDESeqResults(DESeqOutAll_Full_RLE, coef = "age") %>% AnnotDESeqResult(CountAnnoFile = AllCalledData$countsMatrixAnnot, by.x = "PeakName", by.y = "PeakName")
-DESegResultsGroup_FullAll_RLE <- GetDESeqResults(DESeqOutAll_Full_RLE, coef = "conditionPD") %>% AnnotDESeqResult(CountAnnoFile = AllCalledData$countsMatrixAnnot, by.x = "PeakName", by.y = "PeakName")
+
+#### Rerun with CETS cell type correction
+Model2 = as.formula("~Age + CETS + Group")
+
+DESeqOutAll_Full_noCorrection <- RunDESeq(data = countMatrixFullAllCalled$countMatrix, UseModelMatrix = T, MetaSamleCol = "GSM", SampleNameCol = "GSM", 
+                                           meta = countMatrixFullAllCalled$Metadata, normFactor = "MeanRatioOrg", sampleToFilter = "none",
+                                           FullModel = Model2, test = "Wald", FitType = "local")
 
 
-
-#### Rerun without cell type correction
-Model2 = as.formula(" ~ condition + sex + age + batch + pm_hours")
-
-DESeqOutAll_Full_noCorrection <- RunDESeq(data = countMatrix_filtered, UseModelMatrix = T, 
-                             meta = countMatrixFullAllCalled$Metadata, normFactor = "MeanRatioOrg", sampleToFilter = paste(sapply(names(Outlier), function(x) gsub("X", "", x)), collapse = "|"),
-                             FullModel = Model2, test = "Wald", FitType = "local")
-
-
-DESegResultsSex_FullAll_noCorrection <- GetDESeqResults(DESeqOutAll_Full_noCorrection, coef = "sexM") %>% AnnotDESeqResult(CountAnnoFile = AllCalledData$countsMatrixAnnot, by.x = "PeakName", by.y = "PeakName")
-DESegResultsAge_FullAll_noCorrection <- GetDESeqResults(DESeqOutAll_Full_noCorrection, coef = "age") %>% AnnotDESeqResult(CountAnnoFile = AllCalledData$countsMatrixAnnot, by.x = "PeakName", by.y = "PeakName")
-DESegResultsGroup_FullAll_noCorrection <- GetDESeqResults(DESeqOutAll_Full_noCorrection, coef = "conditionPD") %>% AnnotDESeqResult(CountAnnoFile = AllCalledData$countsMatrixAnnot, by.x = "PeakName", by.y = "PeakName")
+#DESegResultsSex_FullAll_noCorrection <- GetDESeqResults(DESeqOutAll_Full_noCorrection, coef = "SexM") %>% AnnotDESeqResult(CountAnnoFile = AllCalledData$countsMatrixAnnot, by.x = "PeakName", by.y = "PeakName")
+DESegResultsAge_FullAll_noCorrection <- GetDESeqResults(DESeqOutAll_Full_noCorrection, coef = "Age") %>% AnnotDESeqResult(CountAnnoFile = AllCalledData$countsMatrixAnnot, by.x = "PeakName", by.y = "PeakName")
+DESegResultsGroup_FullAll_noCorrection <- GetDESeqResults(DESeqOutAll_Full_noCorrection, coef = "GroupAD") %>% AnnotDESeqResult(CountAnnoFile = AllCalledData$countsMatrixAnnot, by.x = "PeakName", by.y = "PeakName")
 
 #RLE normalization
-DESeqOutAll_Full_RLE_noCorrection <- RunDESeq(data = countMatrix_filtered, UseModelMatrix = T, 
-                                 meta = countMatrixFullAllCalled$Metadata, normFactor = NULL, sampleToFilter = paste(sapply(names(Outlier), function(x) gsub("X", "", x)), collapse = "|"),
-                                 FullModel = Model2, test = "Wald", FitType = "local")
+DESeqOutAll_Full_RLE_noCorrection <- RunDESeq(data = countMatrixFullAllCalled$countMatrix, UseModelMatrix = T, MetaSamleCol = "GSM", SampleNameCol = "GSM", 
+                                              meta = countMatrixFullAllCalled$Metadata, normFactor = NULL, sampleToFilter = "none",
+                                              FullModel = Model2, test = "Wald", FitType = "local")
 
 
-DESegResultsSex_FullAll_RLE_noCorrection <- GetDESeqResults(DESeqOutAll_Full_RLE_noCorrection, coef = "sexM") %>% AnnotDESeqResult(CountAnnoFile = AllCalledData$countsMatrixAnnot, by.x = "PeakName", by.y = "PeakName")
-DESegResultsAge_FullAll_RLE_noCorrection <- GetDESeqResults(DESeqOutAll_Full_RLE_noCorrection, coef = "age") %>% AnnotDESeqResult(CountAnnoFile = AllCalledData$countsMatrixAnnot, by.x = "PeakName", by.y = "PeakName")
-DESegResultsGroup_FullAll_RLE_noCorrection <- GetDESeqResults(DESeqOutAll_Full_RLE_noCorrection, coef = "conditionPD") %>% AnnotDESeqResult(CountAnnoFile = AllCalledData$countsMatrixAnnot, by.x = "PeakName", by.y = "PeakName")
+#DESegResultsSex_FullAll_RLE_noCorrection <- GetDESeqResults(DESeqOutAll_Full_RLE_noCorrection, coef = "SexM") %>% AnnotDESeqResult(CountAnnoFile = AllCalledData$countsMatrixAnnot, by.x = "PeakName", by.y = "PeakName")
+DESegResultsAge_FullAll_RLE_noCorrection <- GetDESeqResults(DESeqOutAll_Full_RLE_noCorrection, coef = "Age") %>% AnnotDESeqResult(CountAnnoFile = AllCalledData$countsMatrixAnnot, by.x = "PeakName", by.y = "PeakName")
+DESegResultsGroup_FullAll_RLE_noCorrection <- GetDESeqResults(DESeqOutAll_Full_RLE_noCorrection, coef = "GroupAD") %>% AnnotDESeqResult(CountAnnoFile = AllCalledData$countsMatrixAnnot, by.x = "PeakName", by.y = "PeakName")
 
 
 

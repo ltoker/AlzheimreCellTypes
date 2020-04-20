@@ -17,7 +17,7 @@ CellTypePeakCountLoc = "Data/marzi_counts.tsv"
 CountMatrixLoc = "Data/MarziPaperCounts.tsv"
 Cohort = "Marzi"
 
-MetadataSup <- extract_tables("/Home/siv31/lto092/Downloads/41593_2018_253_MOESM1_ESM.pdf", pages = c(27:30)) %>% lapply(data.frame) %>% rbindlist() #Reading the metadata from the supplementary table 
+MetadataSup <- extract_tables("41593_2018_253_MOESM1_ESM.pdf", pages = c(27:30)) %>% lapply(data.frame) %>% rbindlist() #Reading the metadata from the supplementary table 
 names(MetadataSup) <- c("SampleID", "Group", "BraakStage", "Age", "Sex", "NeuralProportion", "PMI", "Experiment")
 MetadataSup <- MetadataSup[-c(1:3),]
 MetadataSup$AgeNumeric <- as.numeric(as.character(MetadataSup$Age))
@@ -64,6 +64,17 @@ Metadata$Group <- factor(Metadata$Group, levels = c("C", "AD"))
 ##### Add relative cell proportion for based on differential NeuN positive and negative cell H3K27ac peaks ##########  
 Metadata <- GetCellularProportions(Metadata = Metadata)
 
+MetaCellMelt <- gather(Metadata %>% select(matches("Group|CETS$|^Eno2|MSP"), -OligoPrecursors_MSP, -Microglia_deactivation_MSP, -Microglia_activation_MSP), key = "CountType", value = "Value", -Group)
+MetaCellMelt$CountType <- factor(MetaCellMelt$CountType, levels = c("Astrocyte_MSP" , "Endothelial_MSP", "Microglia_MSP", "Microglia_activation_MSP",
+                                                          "Oligo_MSP", "GabaVIPReln_MSP", "Pyramidal_MSP", "NeuNall_MSP", "CETS","Eno2"))
+
+ggplot(MetaCellMelt, aes(Group, Value, color = Group)) +
+  theme_minimal() +
+  geom_boxplot() +
+  geom_jitter(height = 0) +
+  facet_wrap(~CountType, scales = "free_y", nrow = 3)
+
+
 
 ############################# HTseq counts ######################################################################
 
@@ -105,7 +116,7 @@ countMatrixFullAllCalled <- GetCollapsedMatrix(countsMatrixAnnot = AllCalledData
                                                FilterBy = "", meta = AllCalledData$SampleInfo, title = paste0("Sample correlation, ", Cohort))
 closeDev()
 
-#Get the pvalues for associasion of each covariate with the first 3 PCs
+#Get the pvalues for associasion of each covariate with the first 5 PCs
 PCAsamples <- prcomp(t(countMatrixFullAllCalled$CPMdata), scale. = T)
 countMatrixFullAllCalled$Metadata %<>% mutate(PC1 = PCAsamples$x[,1],
                                               PC2 = PCAsamples$x[,2],
@@ -147,8 +158,11 @@ closeDev()
 
 
 #Look at the correlation betweem CETS and ChIP-seq based cell abundance estimates
-CellData <- countMatrixFullAllCalled$Metadata %>% select(-matches("__|Total")) %>% gather(matches("MSP"), key = "CellType", value = "MSP") 
-CellData$CellType <- sapply(CellData$CellType, function(x) gsub("_MSP", "", x)) %>% factor()
+CellData <- countMatrixFullAllCalled$Metadata %>% select(-matches("__|Total")) %>% gather(matches("MSP|CETS$"), key = "CellType", value = "MSP") 
+CellData$CellType <- sapply(CellData$CellType, function(x) gsub("_MSP", "", x)) %>%
+  factor(levels = c("Astrocyte", "Endothelial", "Microglia", "Microglia_activation",
+                    "Microglia_deactivation","Oligo", "OligoPrecursors",
+                    "GabaVIPReln", "Pyramidal", "NeuNall","CETS"))
 CellData %<>% mutate(MSPnorm = MSP/MeanRatioOrg)
 
 
@@ -167,8 +181,58 @@ closeDev()
 
 CellTypeStats <- sapply(levels(CellData$CellType), function(cellType){
   Data = CellData %>% filter(CellType == cellType)
-  lm(MSP~Group + Sex + Agef, data = Data) %>% summary
+  lm(MSP~Group + Sex + Agef, data = Data) 
 }, simplify = F)
+
+CellTypeStatSummary <- lapply(CellTypeStats, function(x){
+  temp <- summary(x) %>% .$coef %>% .[2, c(1,4)]
+  temp2 <- confint(x) %>% .[2,]
+  out <- c(temp, temp2) %>% t
+  colnames(out) <- c("Coeficient", "pValue", "Low", "High")
+  out
+}) %>% do.call(rbind, .) %>% data.frame()
+rownames(CellTypeStatSummary) <- names(CellTypeStats)
+CellTypeStatSummary %<>% mutate(CellType = factor(rownames(.), levels = rownames(.)))
+
+
+CellData2 <- countMatrixFullAllCalled$Metadata %>% select(-matches("__|Total")) %>% gather(matches("MSP|CETS$"), -NeuNall_MSP, key = "CellType", value = "MSP") 
+CellData2$CellType <- sapply(CellData2$CellType, function(x) gsub("_MSP", "", x)) %>%
+  factor(levels = c("Astrocyte", "Endothelial", "Microglia", "Microglia_activation",
+                    "Microglia_deactivation","Oligo", "OligoPrecursors",
+                    "GabaVIPReln", "Pyramidal","CETS"))
+CellData2 %<>% mutate(MSPnorm = MSP/MeanRatioOrg)
+CellTypeStats2 <- sapply(levels(CellData2$CellType), function(cellType){
+  Data = CellData2 %>% filter(CellType == cellType)
+  lm(MSP~Group + Sex + Agef + NeuNall_MSP, data = Data) 
+}, simplify = F)
+
+CellTypeStatSummary2 <- lapply(CellTypeStats2, function(x){
+  temp <- summary(x) %>% .$coef %>% .[2, c(1,4)]
+  temp2 <- confint(x) %>% .[2,]
+  out <- c(temp, temp2) %>% t
+  colnames(out) <- c("Coeficient", "pValue", "Low", "High")
+  out
+}) %>% do.call(rbind, .) %>% data.frame
+rownames(CellTypeStatSummary2) <- names(CellTypeStats2)
+CellTypeStatSummary2 %<>% mutate(CellType = factor(rownames(.), levels = rownames(.)))
+
+
+ggplot(CellTypeStatSummary, aes(CellType, Coeficient)) +
+  theme_minimal(base_size = 14) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(x = "", title = ) +
+  geom_point() +
+  geom_errorbar(aes(ymin = Low, ymax = High)) +
+  geom_hline(yintercept = 0, color = "red", linetype = 2)
+
+
+ggplot(CellTypeStatSummary2, aes(CellType, Coeficient)) +
+  theme_minimal(base_size = 14) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(x = "", title = ) +
+  geom_point() +
+  geom_errorbar(aes(ymin = Low, ymax = High)) +
+  geom_hline(yintercept = 0, color = "red", linetype = 2)
 
 
 ggplot(CellData %>% filter(CellType == "NeuNall"), aes(Group, MSP, color = Group)) +
@@ -222,7 +286,7 @@ SignifCETsMatrix <- SignifCETsDF %>% select(matches("GSM"))
 pheatmap()
 
 
-#Repeat after accounting for Neuroanl and Microglia MSP
+#Repeat after accounting for Neuronal and Microglia MSP
 MarziModelMatrixMSP <- model.matrix(as.formula("~Agef + NeuNall_MSP + Microglia_MSP + Group"), data = countMatrixFullAllCalled$Metadata)
 
 ADcountList2 <- estimateDisp(ADcountList, MarziModelMatrixMSP)
@@ -243,8 +307,24 @@ UniquePeakMSP <- groupResult_MSPAnno %>% filter(PeakName %in% UniquePeakMSP$Peak
 
 UniquePeakCETS <- SignifCETS %>% filter(!PeakName %in% SignifMSP$PeakName)
 
+
+#Repeat after adjusting also for oligos
+MarziModelMatrixMSPb <- model.matrix(as.formula("~Agef + NeuNall_MSP + Microglia_MSP + Oligo_MSP + Group"), data = countMatrixFullAllCalled$Metadata)
+
+ADcountList2b <- estimateDisp(ADcountList, MarziModelMatrixMSP)
+
+fitTMM_MSPb <- glmQLFit(ADcountList2b, MarziModelMatrixMSPb)
+qlf_groupMSPb <- glmQLFTest(fitTMM_MSPb, coef = "GroupAD")
+group_resultsMSPb <- topTags(qlf_groupMSPb, n = Inf) %>% data.frame() %>% mutate(PeakName = rownames(.)) 
+
+
+groupResult_MSPAnno_b <- group_resultsMSPb %>%
+  AnnotDESeqResult(CountAnnoFile = AllCalledData$countsMatrixAnnot, by.x = "PeakName", by.y = "PeakName") %>% arrange(FDR)
+
+
+
 #Run the analysis similar to PD pipeline
-Model = as.formula("~Age + NeuNall_MSP + Microglia_MSP + Group")
+Model = as.formula("~Agef + NeuNall_MSP + Microglia_MSP + Group")
 DESeqOutAll_Full <- RunDESeq(data = countMatrixFullAllCalled$countMatrix, UseModelMatrix = T, MetaSamleCol = "GSM", SampleNameCol = "GSM", 
                              meta = countMatrixFullAllCalled$Metadata, normFactor = "MeanRatioOrg", sampleToFilter = "none",
                              FullModel = Model, test = "Wald", FitType = "local")
@@ -253,6 +333,17 @@ DESeqOutAll_Full <- RunDESeq(data = countMatrixFullAllCalled$countMatrix, UseMod
 #DESegResultsSex_FullAll <- GetDESeqResults(DESeqOutAll_Full, coef = "SexM") %>% AnnotDESeqResult(CountAnnoFile = AllCalledData$countsMatrixAnnot, by.x = "PeakName", by.y = "PeakName")
 DESegResultsAge_FullAll <- GetDESeqResults(DESeqOutAll_Full, coef = "Age") %>% AnnotDESeqResult(CountAnnoFile = AllCalledData$countsMatrixAnnot, by.x = "PeakName", by.y = "PeakName")
 DESegResultsGroup_FullAll <- GetDESeqResults(DESeqOutAll_Full, coef = "GroupAD") %>% AnnotDESeqResult(CountAnnoFile = AllCalledData$countsMatrixAnnot, by.x = "PeakName", by.y = "PeakName")
+
+#Adjusting for oligos too
+Modelb = as.formula("~Agef + NeuNall_MSP + Microglia_MSP + Oligo_MSP + Group")
+DESeqOutAll_Fullb <- RunDESeq(data = countMatrixFullAllCalled$countMatrix, UseModelMatrix = T, MetaSamleCol = "GSM", SampleNameCol = "GSM", 
+                             meta = countMatrixFullAllCalled$Metadata, normFactor = "MeanRatioOrg", sampleToFilter = "none",
+                             FullModel = Modelb, test = "Wald", FitType = "local")
+
+
+#DESegResultsSex_FullAll <- GetDESeqResults(DESeqOutAll_Full, coef = "SexM") %>% AnnotDESeqResult(CountAnnoFile = AllCalledData$countsMatrixAnnot, by.x = "PeakName", by.y = "PeakName")
+DESegResultsAge_FullAllb <- GetDESeqResults(DESeqOutAll_Fullb, coef = "Agef.L") %>% AnnotDESeqResult(CountAnnoFile = AllCalledData$countsMatrixAnnot, by.x = "PeakName", by.y = "PeakName")
+DESegResultsGroup_FullAllb <- GetDESeqResults(DESeqOutAll_Fullb, coef = "GroupAD") %>% AnnotDESeqResult(CountAnnoFile = AllCalledData$countsMatrixAnnot, by.x = "PeakName", by.y = "PeakName")
 
 
 ## Rerun with RLE normalization
@@ -358,3 +449,5 @@ saveRDS(DESegResultsGroup_FullAll_RLE, file = paste0(ResultsPath, Cohort, "DEres
 saveRDS(DESegResultsGroup_FullAll_noCorrection, file = paste0(ResultsPath, Cohort, "DEresultsNoCorrection.Rds"))
 saveRDS(DESegResultsGroup_FullAll_RLE_noCorrection, file = paste0(ResultsPath, Cohort, "DEresultsRLENoCorrection.Rds"))
 
+ADgene <- read.table("Data/GeneCards-SearchResults.csv", header = T, sep = ",")
+PDgene <- read.table("../ChIPseqPD_reproduce/GeneralResults/PDgeneStat.tsv", header = T, sep = "\t")

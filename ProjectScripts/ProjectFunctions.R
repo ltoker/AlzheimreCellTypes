@@ -165,11 +165,13 @@ GetCountMatrixHTseq <- function(countsDF, meta = Metadata, MetaSamleCol = "activ
   MeasureCor <- cor(HouseKeepingRatioPlot %>% select(-matches("id|Sample|GSM")), method = "spearman")
   diag(MeasureCor) <- NA
   
-  pheatmap(MeasureCor, angle_col = 90, na_col = "white", display_numbers = T)
+  Plot <- pheatmap(MeasureCor, angle_col = 90, na_col = "white", display_numbers = T,
+                   filename = paste0(ResultsPath, "HouseKeepingCor", Cohort, ".pdf"), width = 8, height = 8 )
   return(list(countsDF = countsDF,
               countsMatrixAnnot = countsMatrixAnnot,
               SampleInfo = SampleInfo,
-              MeasureCor = MeasureCor))
+              MeasureCor = MeasureCor,
+              HeatMap = Plot))
 }
 
 GetCollapsedMatrix <- function(countsMatrixAnnot, collapseBy, FilterBy, meta = Metadata, normCol = NULL, title = NULL, samples = "All", CorMethod = "pearson", countSampleRegEx = "^X", MetaSamleCol = "activemotif_id", MetaSamleIDCol = "SampleID", groupCol = "condition"){
@@ -236,7 +238,7 @@ GetCollapsedMatrix <- function(countsMatrixAnnot, collapseBy, FilterBy, meta = M
                    annotation_col = annoCol,
                    annotation_row = annoRow,
                    annotation_colors = annoColors,
-                   main = title)
+                   main = title, filename = paste0(ResultsPath, "SampleCorAllPeaks", Cohort, ".pdf"), useDingbats = F, width = 10, height = 8)
   
   return(list(countMatrix = subData,
               Metadata = meta,
@@ -393,8 +395,9 @@ GetCellularProportions <- function(Metadata, normCol = NULL){
 RunDESeq <- function(data, meta, normFactor=NULL, sampleToFilter = "none",  FullModel, ReducedModel = "~1", test = "Wald", UseModelMatrix = FALSE, FitType = "parametric", MetaSamleCol = "activemotif_id", SampleNameCol = "SampleName"){
   meta = meta[!grepl(sampleToFilter, meta[[MetaSamleCol]]),] %>% droplevels
   data = data[,as.character(meta[[SampleNameCol]])]
+  ModelMatrix <- model.matrix(FullModel, meta)
   
-  DESeqDS <- DESeqDataSetFromMatrix(countData = data, colData = meta, design = FullModel)
+  DESeqDS <- DESeqDataSetFromMatrix(countData = data, colData = meta, design = ModelMatrix)
   
   DESeqDS <-  estimateSizeFactors(DESeqDS)
   if(!is.null(normFactor)){
@@ -402,7 +405,6 @@ RunDESeq <- function(data, meta, normFactor=NULL, sampleToFilter = "none",  Full
   }
   DESeqDS <- estimateDispersions(DESeqDS, fitType = FitType)
   
-  ModelMatrix <- model.matrix(FullModel, meta)
   
   if(test == "Wald"){
     if(UseModelMatrix){

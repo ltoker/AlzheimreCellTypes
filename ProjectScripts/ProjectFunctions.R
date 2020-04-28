@@ -204,33 +204,22 @@ GetCollapsedMatrix <- function(countsMatrixAnnot, collapseBy, FilterBy, meta = M
   diag(SampleCor) <- NA
   MedianCor <- apply(SampleCor, 1, function(x) median(x, na.rm = T))
   annoRow = data.frame(Group = meta[[groupCol]],
-                       #RIN = meta$rin,
                        Age = meta$Age,
-                       #Batch = meta$batch,
                        Sex = meta$Sex,
                        row.names = meta[[MetaSamleIDCol]])
   annoCol = data.frame(Group = meta[[groupCol]],
-                       CETs = meta$CETS,
-                       ENO2 = meta$Eno2,
+                       BraakStage = meta$BraakStage,
+                       Neuron_CETs = meta$CETS,
                        NeuNall_MSP = meta$NeuNall_MSP,
-                       OligoMSP = meta$Oligo_MSP,
-                       AstrocyteMSP = meta$Astrocyte_MSP,
-                       MicrogliaMSP = meta$Microglia_MSP,
-                       #OligoMSPNorm = meta$Oligo_MSP/meta$MeanRatioOrg,
+                       Oligo_MSP = meta$Oligo_MSP,
                        row.names = meta[[MetaSamleIDCol]])
-  annoColors = list(Group = c(C = "dodgerblue4" , AD = "chocolate1"),
-                    # Batch = c(A = "cornflowerblue", B = "darkolivegreen1", C = "chartreuse4",
-                    #           D = "darkgoldenrod1", E = "brown1", F = "blueviolet", G = "cadetblue1",   H = "deeppink")[c("A", "B", "C", "D", "E", "F", "G", "H") %in% unique(meta$batch)],
+  annoColors = list(Group = c(Control = "dodgerblue4" , AD = "chocolate1"),
                     Sex = c(F = "indianred4", M = "cornflowerblue"),
-                    #RIN = c("yellow", "black"),
                     Age = c("darkseagreen1", "darkorchid4"),
-                    #OligoMSPNorm = c("blue4", "cornsilk","chocolate1")
-                    OligoMSP = c("chartreuse4","gray97","maroon"),
-                    CETs = c("chartreuse4","gray97","maroon"),
-                    ENO2 = c("chartreuse4","gray97","maroon"),
-                    MicrogliaMSP = c("chartreuse4","gray97","maroon"),
+                    Neuron_CETs = c("chartreuse4","gray97","maroon"),
                     NeuNall_MSP = c("chartreuse4","gray97","maroon"),
-                    AstrocyteMSP = c("chartreuse4","gray97","maroon"))
+                    Oligo_MSP = c("chartreuse4","gray97","maroon"),
+                    BraakStage = c("azure", "darkorchid4"))
   Plot <- pheatmap(SampleCor, angle_col = 90, na_col = "white",border_color = NA,
                    color = colorRampPalette(c("darkblue", "gold2"))(999),
                    labels_row = meta[[MetaSamleCol]],

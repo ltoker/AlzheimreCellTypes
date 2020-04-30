@@ -6,9 +6,11 @@ packageF("tabulizer")
 packageF("limma")
 packageF("edgeR")
 packageF("Rsubread")
+ResultsPath = "Results"
 
-if("CellTypeSpecificCounts.Rds" %in% list.files(path = "Data")){
-  CountsCells <- readRDS("Data/CellTypeSpecificCounts.Rds")
+
+if("CellTypeSpecificCounts.Rda" %in% list.files(path = "Data")){
+  load("Data/CellTypeSpecificCounts.Rda")
 } else {
   #Import the peakset from Marzi et al. and create a SAF file
   temp <- read.table("Data/GSE102538_H3K27ac_EntorhinalCortex.bed.gz", header = F, sep = " ") %>%
@@ -34,7 +36,22 @@ if("CellTypeSpecificCounts.Rds" %in% list.files(path = "Data")){
   
   CountsCells <- temp2$counts
   colnames(CountsCells) <- SampleNames
-  saveRDS(CountsCells, file = "Data/CellTypeSpecificCounts.Rds")
+  
+  #Annotate the peaks
+  annoFileCollapsed <- GetGenomeAnno(genome = "hg19")
+  PeakLocation <- temp %>% as(., "GRanges")
+  seqlevelsStyle(PeakLocation) <- "UCSC"
+  PeakLocation <- keepSeqlevels(PeakLocation, paste0("chr",c(1:22, "X", "Y")), pruning.mode = "coarse")
+  
+  PeakAnnoFile <- mergeByOverlaps(annoFileCollapsed, PeakLocation, maxgap = 0, type = "any", select = "all") %>% data.frame()
+  names(PeakAnnoFile)[1:4] <- c("Region.CHR", "Region.START", "Region.END", "Region.width")
+  PeakAnnoFile %<>% select(-matches("strand|_id|^id|^PeakName|annoFileCollapsed|^GeneID"))
+  
+  names(PeakAnnoFile)[grepl("PeakLocation", names(PeakAnnoFile))] <- c("Peak.CHR", "Peak.START", "Peak.END", "Peak.width", "PeakName")
+  PeakAnnoFile %<>% mutate(Peak.Location = paste0(Peak.CHR, ":", Peak.START, "-", Peak.END))
+  
+  
+  save(CountsCells, PeakAnnoFile, file = "Data/CellTypeSpecificCounts.Rda")
 }
   
 CellTypeMeta <- read.table("Data/CellTypesH3K27ac/MSSM_U01MH103392_EpiMap_Metadata_ChIPseq_August2016Release.csv",
@@ -84,7 +101,17 @@ qlf_CellType <- glmQLFTest(fitTMM, coef = "CellType2Neuron")
 CellType_results <- topTags(qlf_CellType, n = Inf) %>% data.frame() %>% mutate(PeakName = rownames(.))
 
 CellTypeResult_Anno <- CellType_results %>%
-  AnnotDESeqResult(CountAnnoFile = AllCalledData$countsMatrixAnnot %>% select(-matches("GSM")), by.x = "PeakName", by.y = "PeakName") %>% arrange(FDR)
+  AnnotDESeqResult(CountAnnoFile = PeakAnnoFile, by.x = "PeakName", by.y = "PeakName") %>% arrange(FDR)
+
+
+##### load AD analysis objects ############################
+ResultsMarziCETs <- readRDS("Results/MarziedgeR_CETs.Rds")
+ResultsMarziMSP <- readRDS("Results/MarziedgeR_MSP.Rds")
+###########################################################
+
+SignifCETS <- ResultsMarziCETs %>% filter(FDR < 0.05, !duplicated(PeakName)) %>% select(PeakName, logCPM, logFC, PValue, FDR)
+SignifMSP <- ResultsMarziMSP %>% filter(FDR < 0.05, !duplicated(PeakName)) %>% select(PeakName, logCPM, logFC, PValue, FDR)
+
 
 CellType_resultsSignifMarziCETS <- CellType_results %>% filter(PeakName %in% SignifCETS$PeakName)
 CellType_resultsSignifMarziCETS$MethodSignif = "CETs"
@@ -95,6 +122,8 @@ CellType_resultsSignifMarziCETS$DirectictionChange <- sapply(CellType_resultsSig
     "Hyperacetylated"
   }
 })
+CellType_resultsSignifMarziCETS$logFC_AD <- SignifCETS$logFC[match(CellType_resultsSignifMarziCETS$PeakName, SignifCETS$PeakName)]
+
 
 CellType_resultsSignifMarziMSP <- CellType_results %>% filter(PeakName %in% SignifMSP$PeakName)
 CellType_resultsSignifMarziMSP$MethodSignif = "MSP"
@@ -105,25 +134,68 @@ CellType_resultsSignifMarziMSP$DirectictionChange <- sapply(CellType_resultsSign
     "Hyperacetylated"
   }
 })
+CellType_resultsSignifMarziMSP$logFC_AD <- SignifMSP$logFC[match(CellType_resultsSignifMarziMSP$PeakName, SignifMSP$PeakName)]
+
+
 
 CellType_resultsSignifMarzi <- rbind(CellType_resultsSignifMarziCETS, CellType_resultsSignifMarziMSP)
-CellType_resultsSignifMarzi$DirectictionChange <- factor(CellType_resultsSignifMarzi$DirectictionChange, levels = c("Hypoacetylated, hyperacetylated"))
+CellType_resultsSignifMarzi$DirectictionChange <- factor(CellType_resultsSignifMarzi$DirectictionChange, levels = c("Hypoacetylated", "Hyperacetylated"))
 
 ggplot(CellType_resultsSignifMarzi, aes(DirectictionChange, logFC, color = DirectictionChange)) +
   theme_minimal() +
-  labs(x = "", y = "logFC (Neuron/Glia)") +
+  labs(x = "", y = "logFC (Neurons vs. Glia)") +
   geom_violin(aes(fill = DirectictionChange)) +
   geom_boxplot(width = 0.2)+
-  scale_color_manual(values =  c("orange", "chartreuse4")) +
-  scale_fill_manual(values =  c("orange", "chartreuse4")) +
+  scale_color_manual(values =  c("chartreuse4", "orange")) +
+  scale_fill_manual(values =  c("chartreuse4", "orange")) +
   geom_hline(yintercept = 0, color = "red") +
   facet_wrap(~MethodSignif)
 
-ggsave(paste0("MethodComparisonBoxplot.tif"), device = "tiff", width = 8, height = 6, dpi = 300, path = ResultsPath)
+ggsave(paste0("MethodComparisonBoxplot.pdf"), device = "pdf", width = 8, height = 6, dpi = 300, path = ResultsPath)
+
+ggplot(CellType_resultsSignifMarzi, aes(logFC_AD, logFC)) +
+  theme_bw() +
+  labs(y = "logFC (Neurons vs. Glia)") +
+  geom_point() +
+  geom_hline(yintercept = 0) +
+  geom_vline(xintercept = 0) +
+  facet_wrap(~MethodSignif, nrow = 2)
+
+ggplot(AllResults %>% filter(FDR_CETs < 0.05), aes(logFC, logFC_MSP)) +
+  theme_minimal() +
+  labs(x = "logFC (Neurons vs. Glia)") +
+  geom_point() +
+  geom_point(data = AllResults %>% filter(FDR_MSP < 0.05), color = "orange") +
+  geom_hline(yintercept = 0, color = "red") +
+  geom_vline(xintercept = 0, color = "red") 
+
+ggplot(AllResults %>% filter(FDR_MSP < 0.05), aes(logFC, logFC_CETs)) +
+  theme_minimal() +
+  labs(x = "logFC (Neurons vs. Glia)") +
+  geom_point() +
+  #geom_point(data = AllResults %>% filter(FDR_CETs < 0.05), color = "orange") +
+  geom_hline(yintercept = 0, color = "red") +
+  geom_vline(xintercept = 0, color = "red") 
+
+AllResults <- merge(group_results %>% select(PeakName, logFC, FDR), group_resultsMSP %>% select(PeakName, logFC, FDR), by = "PeakName", suffixes = c("_CETs", "_MSP"))
+AllResults <- merge(AllResults, CellType_results %>% select(PeakName, logFC, FDR), by = "PeakName")
+
+ggplot(AllResults, aes(logFC, logFC_CETs)) +
+  theme_minimal() +
+  labs(x = "logFC (Neurons vs. Glia)") +
+  geom_point(data = AllResults %>% filter(FDR_CETs > 0.05)) +
+  geom_point(data = AllResults %>% filter(FDR_CETs < 0.05), color = "orange") +
+  geom_hline(yintercept = 0, color = "red") +
+  geom_vline(xintercept = 0, color = "red") 
 
 
-CellType_Anno <- CellType_results %>%
-  AnnotDESeqResult(CountAnnoFile = AllCalledData$countsMatrixAnnot, by.x = "PeakName", by.y = "PeakName") %>% arrange(FDR)
+ggplot(AllResults, aes(logFC, logFC_MSP)) +
+  theme_minimal() +
+  labs(x = "logFC (Neurons vs. Glia)") +
+  geom_point(data = AllResults %>% filter(FDR_MSP > 0.05)) +
+  geom_point(data = AllResults %>% filter(FDR_MSP < 0.05), color = "orange") +
+  geom_hline(yintercept = 0, color = "red") +
+  geom_vline(xintercept = 0, color = "red") 
 
 
 #Get the TMM psudo counts

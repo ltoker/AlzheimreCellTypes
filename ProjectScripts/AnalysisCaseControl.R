@@ -294,9 +294,7 @@ groupResult_Anno <- group_results %>%
   AnnotDESeqResult(CountAnnoFile = AllCalledData$countsMatrixAnnot, by.x = "PeakName", by.y = "PeakName") %>% arrange(FDR)
 
 
-
-
-#Heatmap of significant peaks (Attempt to reproduce Fig. 4)
+#Heatmap of significant peaks (Attempt to reproduce Fig. 4 from Marzi et al.)
 PlotPeakHeatmap <- function(data, meta, title){
   Neuron_CETsColor <- rev(brewer.pal(n = 5, "Greys"))
   names(Neuron_CETsColor) <- levels(meta$CETSif)
@@ -335,16 +333,14 @@ PlotPeakHeatmap <- function(data, meta, title){
 SignifCETsPeaksHyper <- group_results %>% filter(FDR < 0.05, logFC > 0) %>% select(matches("PeakName|logFC|FDR"))
 SignifCETsPeaksHypo <- group_results %>% filter(FDR < 0.05, logFC < 0) %>% select(matches("PeakName|logFC|FDR"))
 
-SignifCETSTMM <- cpm(ADcountList, log = T)
+CETSTMM <- cpm(ADcountList, log = T)
 
-SignifCETSTMMhyper <- SignifCETSTMM[rownames(SignifCETSTMM) %in% SignifCETsPeaksHyper$PeakName,]
-SignifCETSTMMhypo <- SignifCETSTMM[rownames(SignifCETSTMM) %in% SignifCETsPeaksHypo$PeakName,]
-
-
-
+SignifCETSTMMhyper <- CETSTMM[rownames(CETSTMM) %in% SignifCETsPeaksHyper$PeakName,]
+SignifCETSTMMhypo <- CETSTMM[rownames(CETSTMM) %in% SignifCETsPeaksHypo$PeakName,]
 
 PlotPeakHeatmap(SignifCETSTMMhyper, Metadata, title = "CETs_Hyper")
 PlotPeakHeatmap(SignifCETSTMMhypo, Metadata, title = "CETs_Hypo")
+
 
 
 #Repeat after adjusting also for neurons, microglia and oligos
@@ -361,6 +357,20 @@ groupResult_MSPAnno <- group_resultsMSP %>%
   AnnotDESeqResult(CountAnnoFile = AllCalledData$countsMatrixAnnot, by.x = "PeakName", by.y = "PeakName") %>% arrange(FDR)
 
 
+#Heatmap of significant peaks
+SignifMSPsPeaksHyper <- group_resultsMSP %>% filter(FDR < 0.05, logFC > 0) %>% select(matches("PeakName|logFC|FDR"))
+SignifMSPsPeaksHypo <- group_resultsMSP %>% filter(FDR < 0.05, logFC < 0) %>% select(matches("PeakName|logFC|FDR"))
+
+MSPsTMM <- cpm(ADcountList2, log = T)
+
+SignifMSPsTMMhyper <- MSPsTMM[rownames(MSPsTMM) %in% SignifMSPsPeaksHyper$PeakName,]
+SignifMSPsTMMhypo <- MSPsTMM[rownames(MSPsTMM) %in% SignifMSPsPeaksHypo$PeakName,]
+
+PlotPeakHeatmap(SignifMSPsTMMhyper, Metadata, title = "MSPs_Hyper")
+PlotPeakHeatmap(SignifMSPsTMMhypo, Metadata, title = "MSPs_Hypo")
+
+
+#Merge results from both analyses
 CompareResultsDF <- merge(group_results, group_resultsMSP, by = "PeakName", suffixes = c("_CETs", "_MSP"), sort = FALSE)
 CompareResultsDF$MethodSignif <- apply(CompareResultsDF %>% select(FDR_CETs, FDR_MSP), 1, function(x){
   if(x[1] < 0.05 & x[2] < 0.05){
@@ -387,27 +397,9 @@ ggplot(CompareResultsDF, aes(logFC_CETs, logFC_MSP)) +
   geom_abline(slope = 1, intercept = 0, color = "blue")
 ggsave(paste0("MethodComparison.tif"), device = "tiff", width = 8, height = 6, dpi = 300, path = ResultsPath)
 
-#Heatmap of significant peaks
-SignifMSPsPeaksHyper <- group_resultsMSP %>% filter(FDR < 0.05, logFC > 0) %>% select(matches("PeakName|logFC|FDR"))
-SignifMSPsPeaksHypo <- group_resultsMSP %>% filter(FDR < 0.05, logFC < 0) %>% select(matches("PeakName|logFC|FDR"))
-
-SignifMSPsTMM <- cpm(ADcountList2, log = T)
-
-SignifMSPsTMMhyper <- SignifMSPsTMM[rownames(SignifMSPsTMM) %in% SignifMSPsPeaksHyper$PeakName,]
-SignifMSPsTMMhypo <- SignifMSPsTMM[rownames(SignifMSPsTMM) %in% SignifMSPsPeaksHypo$PeakName,]
-
-PlotPeakHeatmap(SignifMSPsTMMhyper, Metadata, title = "MSPs_Hyper")
-PlotPeakHeatmap(SignifMSPsTMMhyper, Metadata, title = "MSPs_Hypo")
-
-
 
 
 #Find Overlaps
-SignifCETSTMMhyper <- SignifCETSTMM[rownames(SignifCETSTMM) %in% SignifCETsPeaksHyper$PeakName,]
-SignifCETSTMMhypo <- SignifCETSTMM[rownames(SignifCETSTMM) %in% SignifCETsPeaksHypo$PeakName,]
-
-
-
 SignifCETS <- group_results %>% filter(FDR < 0.05)
 SignifMSP <- group_resultsMSP %>% filter(FDR < 0.05)
 

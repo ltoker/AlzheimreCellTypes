@@ -207,28 +207,27 @@ GetCollapsedMatrix <- function(countsMatrixAnnot, collapseBy, FilterBy, meta = M
                        Age = meta$Age,
                        Sex = meta$Sex,
                        row.names = meta[[MetaSamleIDCol]])
-  annoCol = data.frame(Group = meta[[groupCol]],
-                       BraakStage = meta$BraakStage,
-                       Neuron_CETs = meta$CETS,
-                       NeuNall_MSP = meta$NeuNall_MSP,
+  annoCol = data.frame(CETS = meta$CETS,
+                       Neuronal_MSP = meta$NeuNall_MSP,
+                       Microglia_MSP = meta$Microglia_MSP,
                        Oligo_MSP = meta$Oligo_MSP,
                        row.names = meta[[MetaSamleIDCol]])
   annoColors = list(Group = c(Control = "dodgerblue4" , AD = "chocolate1"),
                     Sex = c(F = "indianred4", M = "cornflowerblue"),
                     Age = c("darkseagreen1", "darkorchid4"),
-                    Neuron_CETs = c("chartreuse4","gray97","maroon"),
-                    NeuNall_MSP = c("chartreuse4","gray97","maroon"),
-                    Oligo_MSP = c("chartreuse4","gray97","maroon"),
-                    BraakStage = c("azure", "darkorchid4"))
+                    CETS = c("chartreuse4","gray97","maroon"),
+                    Neuronal_MSP = c("chartreuse4","gray97","maroon"),
+                    Microglia_MSP = c("chartreuse4","gray97","maroon"),
+                    Oligo_MSP = c("chartreuse4","gray97","maroon"))
   Plot <- pheatmap(SampleCor, angle_col = 90, na_col = "white",border_color = NA,
                    color = colorRampPalette(c("darkblue", "gold2"))(999),
                    labels_row = meta[[MetaSamleCol]],
-                   labels_col = meta[[MetaSamleCol]],
+                   labels_col = meta[[MetaSamleCol]],show_rownames = F, show_colnames = F,
                    annotation_col = annoCol,
                    annotation_row = annoRow,
                    annotation_colors = annoColors,
                    main = title, filename = paste0(ResultsPath, "SampleCorAllPeaks", Cohort, ".pdf"), useDingbats = F, width = 10, height = 8)
-  
+  closeDev()
   return(list(countMatrix = subData,
               Metadata = meta,
               SampleCor = SampleCor[order(MedianCor), order(MedianCor)],

@@ -6,7 +6,10 @@ packageF("tabulizer")
 packageF("limma")
 packageF("edgeR")
 packageF("Rsubread")
-ResultsPath = "Results"
+packageF("cluster")
+ResultsPath = "Results/"
+
+Metadata <- readRDS("Data/Metada.Rds")
 
 
 if("CellTypeSpecificCounts.Rda" %in% list.files(path = "Data")){
@@ -106,6 +109,7 @@ CellTypeResult_Anno <- CellType_results %>%
 
 ##### load AD analysis objects ############################
 ResultsMarziCETs <- readRDS("Results/MarziedgeR_CETs.Rds")
+ResultsMarziCETs_b <- readRDS("Results/MarziedgeR_CETs_b.Rds")
 ResultsMarziMSP <- readRDS("Results/MarziedgeR_MSP.Rds")
 ###########################################################
 
@@ -153,58 +157,60 @@ ggplot(CellType_resultsSignifMarzi, aes(DirectictionChange, logFC, color = Direc
 
 ggsave(paste0("MethodComparisonBoxplot.pdf"), device = "pdf", width = 8, height = 6, dpi = 300, path = ResultsPath)
 
-ggplot(CellType_resultsSignifMarzi, aes(logFC_AD, logFC)) +
-  theme_bw() +
-  labs(y = "logFC (Neurons vs. Glia)") +
-  geom_point() +
-  geom_hline(yintercept = 0) +
-  geom_vline(xintercept = 0) +
-  facet_wrap(~MethodSignif, nrow = 2)
 
-ggplot(AllResults %>% filter(FDR_CETs < 0.05), aes(logFC, logFC_MSP)) +
-  theme_minimal() +
+AllResults <- rbind((ResultsMarziCETs %>% select(PeakName, logFC, FDR) %>% filter(!duplicated(PeakName)) %>% mutate(Method = "CETs")),
+                    ResultsMarziMSP %>% select(PeakName, logFC, FDR) %>% filter(!duplicated(PeakName)) %>% mutate(Method = "MSP"))
+
+AllResults <- merge(AllResults, CellType_results %>% select(PeakName, logFC, FDR), by = "PeakName", suffixes = c("_AD", "_Neurons"))
+
+CorDF <- data.frame(Method = c("CETs", "MSP"),
+                    x1 = -6, y1 = 2,
+                    x2 = -6, y2 = 1.8)
+
+CorDF$CorAll <- sapply(CorDF$Method, function(method){
+  temp <- cor.test(~logFC_Neurons + logFC_AD, data = AllResults %>% filter(Method == method))
+  round(temp$estimate, digits = 2)
+})
+
+CorDF$CorSignif <- sapply(CorDF$Method, function(method){
+  temp <- cor.test(~logFC_Neurons + logFC_AD, data = AllResults %>% filter(Method == method, FDR_AD < 0.05))
+  round(temp$estimate, digits = 2)
+})
+
+CorDF %<>% mutate(Text = paste0("'r'[italic('All peaks')] ", "*", "' = '", CorAll))
+CorDF %<>% mutate(Text2 = paste0("'r'[italic('Significant peaks')] ", "*", "' = '", CorSignif))
+
+ggplot(AllResults, aes(logFC_Neurons, logFC_AD)) +
+  theme_classic() +
   labs(x = "logFC (Neurons vs. Glia)") +
-  geom_point() +
-  geom_point(data = AllResults %>% filter(FDR_MSP < 0.05), color = "orange") +
-  geom_hline(yintercept = 0, color = "red") +
-  geom_vline(xintercept = 0, color = "red") 
+  stat_bin2d(bins = 100) +
+  geom_point(data = AllResults %>% filter(FDR_AD < 0.05), color = "orange", alpha = 0.4) +
+  geom_hline(yintercept = 0, color = "white") +
+  geom_vline(xintercept = 0, color = "white") +
+  geom_text(data = CorDF, aes(x = x1, y = y1, label = Text), parse = T, hjust = 0) +
+  geom_text(data = CorDF, aes(x = x2, y = y2, label = Text2), parse = T, hjust = 0) +
+  facet_wrap(~Method)
+ggsave(paste0("MethodComparisonScatter.pdf"), device = "pdf", width = 8, height = 5, dpi = 300, path = ResultsPath)
 
-ggplot(AllResults %>% filter(FDR_MSP < 0.05), aes(logFC, logFC_CETs)) +
-  theme_minimal() +
+#Get correlations for model with CETS as continuous variable 
+
+CETS_continuousCells <- merge(ResultsMarziCETs_b %>% select(PeakName, logFC, FDR) %>% filter(!duplicated(PeakName)),
+                              CellType_results %>% select(PeakName, logFC, FDR), by = "PeakName", suffixes = c("_AD", "_Neurons"))
+
+cor.test(~logFC_AD + logFC_Neurons, data = CETS_continuousCells)
+cor.test(~logFC_AD + logFC_Neurons, data = CETS_continuousCells %>% filter(FDR_AD < 0.05))
+
+ggplot(A, aes(logFC_Neurons, logFC_AD)) +
+  theme_classic() +
   labs(x = "logFC (Neurons vs. Glia)") +
-  geom_point() +
-  #geom_point(data = AllResults %>% filter(FDR_CETs < 0.05), color = "orange") +
-  geom_hline(yintercept = 0, color = "red") +
-  geom_vline(xintercept = 0, color = "red") 
-
-AllResults <- merge(group_results %>% select(PeakName, logFC, FDR), group_resultsMSP %>% select(PeakName, logFC, FDR), by = "PeakName", suffixes = c("_CETs", "_MSP"))
-AllResults <- merge(AllResults, CellType_results %>% select(PeakName, logFC, FDR), by = "PeakName")
-
-ggplot(AllResults, aes(logFC, logFC_CETs)) +
-  theme_minimal() +
-  labs(x = "logFC (Neurons vs. Glia)") +
-  geom_point(data = AllResults %>% filter(FDR_CETs > 0.05)) +
-  geom_point(data = AllResults %>% filter(FDR_CETs < 0.05), color = "orange") +
-  geom_hline(yintercept = 0, color = "red") +
-  geom_vline(xintercept = 0, color = "red") 
-
-
-ggplot(AllResults, aes(logFC, logFC_MSP)) +
-  theme_minimal() +
-  labs(x = "logFC (Neurons vs. Glia)") +
-  geom_point(data = AllResults %>% filter(FDR_MSP > 0.05)) +
-  geom_point(data = AllResults %>% filter(FDR_MSP < 0.05), color = "orange") +
-  geom_hline(yintercept = 0, color = "red") +
-  geom_vline(xintercept = 0, color = "red") 
-
+  stat_bin2d(bins = 100) +
+  geom_point(data = CETS_continuousCells %>% filter(FDR_AD < 0.05), color = "orange", alpha = 0.4) +
+  geom_hline(yintercept = 0, color = "white") +
+  geom_vline(xintercept = 0, color = "white")
 
 #Get the TMM psudo counts
 
-CountCellsTMM <- cpm(CellTypecountList)
-CountCellsTMM <- apply(CountCellsTMM, c(1,2), function(x) log2(x+1))
-
-CountCellsTMM2 <- cpm(CellTypecountList, log = T)
-
+CountCellsTMM <- cpm(CellTypecountList, log = T)
 
 CountCellsTMMDown <- CountCellsTMM[rownames(CountCellsTMM) %in% c(SignifCETS %>% filter(logFC < 0) %>% .$PeakName),]
 
@@ -236,3 +242,4 @@ pheatmap(CountCellsTMMDownMSP, scale = "row", border_color = NA, show_rownames =
 pheatmap(CountCellsTMMUpMSP, scale = "row", border_color = NA, show_rownames = F, main = "MSP, Hyperacetylated",
          filename = paste0(ResultsPath, "HeatmapCellTMM_MSPs_Hyperacetylated.pdf"),  width = 8, height = 8)
 
+save.image(paste0(ResultsPath, "CellTypeComparison.Rdata"))

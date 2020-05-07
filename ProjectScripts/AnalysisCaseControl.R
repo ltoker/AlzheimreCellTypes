@@ -6,6 +6,9 @@ packageF("tabulizer")
 packageF("limma")
 packageF("edgeR")
 packageF("RColorBrewer")
+packageF("ggpubr")
+packageF("venn")
+packageF("cluster")
 
 ResultsPath = "Results"
 if(!ResultsPath %in% list.dirs(full.names = F, recursive = F)){
@@ -78,19 +81,133 @@ Metadata %<>% filter(!duplicated(GSM))
 rownames(Metadata) <- Metadata$GSM %>% as.character()
 Metadata %<>% select(-MergeColumn)
 
+
 ##### Add relative cell proportion for based on differential NeuN positive and negative cell H3K27ac peaks ##########  
 Metadata <- GetCellularProportions(Metadata = Metadata)
+names(Metadata)[grepl("Microglia", names(Metadata))] <- sapply(names(Metadata)[grepl("Microglia", names(Metadata))], function(x){
+  gsub("ivation", "", x)
+})
 
-MetaCellMelt <- gather(Metadata %>% select(matches("Group|CETS$|^Eno2|MSP"), -OligoPrecursors_MSP, -Microglia_deactivation_MSP, -Microglia_activation_MSP), key = "CountType", value = "Value", -Group)
-MetaCellMelt$CountType <- factor(MetaCellMelt$CountType, levels = c("Astrocyte_MSP" , "Endothelial_MSP", "Microglia_MSP", "Microglia_activation_MSP",
-                                                          "Oligo_MSP", "GabaVIPReln_MSP", "Pyramidal_MSP", "NeuNall_MSP", "CETS","Eno2"))
+Metadata$NeuNall_MSPif <-  cut(Metadata$NeuNall_MSP, breaks=5, ordered_result = T)
+Metadata$Oligo_MSPif <-  cut(Metadata$Oligo_MSP, breaks=5, ordered_result = T)
+Metadata$Microglia_MSPif <-  cut(Metadata$Microglia_MSP, breaks=5, ordered_result = T)
 
-ggplot(MetaCellMelt, aes(Group, Value, color = Group)) +
-  theme_minimal() +
-  geom_boxplot() +
-  geom_jitter(height = 0) +
-  facet_wrap(~CountType, scales = "free_y", nrow = 3)
+EstimateMelt <- Metadata %>% mutate(CETS = rescale(CETS, c(0,1)),
+                                    deltaCTEno2 = rescale(deltaCTEno2, c(0,1))) %>%
+  select(Group, CETS, deltaCTEno2, NeuNall_MSP, Agef, Sex) %>% gather(key = "Method", value = "Estimate", -Group, -Agef, -Sex)
 
+EstimateStat <- sapply(unique(EstimateMelt$Method), function(method){
+  data <- EstimateMelt %>% filter(Method == method)
+  stat <- lm(Estimate~Group + Sex + Agef, data = data) %>% summary %>% .$coef %>% .[2,4]
+  signif <- if(stat > 0.05){
+    ""
+  } else if(stat > 0.01){
+    "*"
+  } else if(stat > 0.001){
+    "**"
+  }
+  data.frame(Method = method, Text = paste0("p = ", signif(stat, digits = 2), signif), x = 1.5, y = 1.2)
+}, simplify = F) %>% rbindlist()
+
+
+
+#Look at the differences in the different estimated of cell types
+CellData <- Metadata %>% select(-matches("__|Total")) %>% gather(matches("MSP|CETS$"), key = "CellType", value = "MSP") 
+CellData$CellType <- sapply(CellData$CellType, function(x) gsub("_MSP", "", x)) %>%
+  factor(levels = c("Astrocyte", "Endothelial", "Microglia", "Microglia_act",
+                    "Microglia_deact","Oligo", "OligoPrecursors",
+                    "GabaVIPReln", "Pyramidal", "NeuNall","CETS"))
+
+#Get confidence intervals for differences for all cell type MSPs
+#First round
+CellTypeStats <- sapply(levels(CellData$CellType), function(cellType){
+  Data = CellData %>% filter(CellType == cellType)
+  lm(MSP~Group + Sex + Agef, data = Data) 
+}, simplify = F)
+
+#Adjusting for differences in neurons, since they change across the groups
+CellData2 <- Metadata %>% select(-matches("__|Total")) %>% gather(matches("MSP|CETS$"), -NeuNall_MSP, key = "CellType", value = "MSP") 
+CellData2$CellType <- sapply(CellData2$CellType, function(x) gsub("_MSP", "", x)) %>%
+  factor(levels = c("Astrocyte", "Endothelial", "Microglia", "Microglia_act",
+                    "Microglia_deact","Oligo", "OligoPrecursors",
+                    "GabaVIPReln", "Pyramidal","CETS"))
+
+CellTypeStats2 <- sapply(levels(CellData2$CellType), function(cellType){
+  Data = CellData2 %>% filter(CellType == cellType)
+  lm(MSP~Group + Sex + Agef + NeuNall_MSP, data = Data) 
+}, simplify = F)
+
+#Adjusting for both neurons and miroglia (microglia is differential after adjustment for neurons)
+CellData3 <- Metadata %>% select(-matches("__|Total")) %>% gather(matches("MSP|CETS$"), -NeuNall_MSP, -Microglia_MSP, key = "CellType", value = "MSP") 
+CellData3$CellType <- sapply(CellData3$CellType, function(x) gsub("_MSP", "", x)) %>%
+  factor(levels = c("Astrocyte", "Endothelial", "Microglia_act",
+                    "Microglia_deact","Oligo", "OligoPrecursors",
+                    "GabaVIPReln", "Pyramidal","CETS"))
+
+CellTypeStats3 <- sapply(levels(CellData3$CellType), function(cellType){
+  Data = CellData3 %>% filter(CellType == cellType)
+  lm(MSP~Group + Sex + Agef + NeuNall_MSP + Microglia_MSP, data = Data) 
+}, simplify = F)
+
+
+GetConfInt <- function(StatData, Name){
+  CellTypeStatSummary <- lapply(StatData, function(x){
+    temp <- summary(x) %>% .$coef %>% .[2, c(1,4)]
+    temp2 <- confint(x) %>% .[2,]
+    out <- c(temp, temp2) %>% t
+    colnames(out) <- c("Coeficient", "pValue", "Low", "High")
+    out
+  }) %>% do.call(rbind, .) %>% data.frame()
+  CellTypeStatSummary$Signif <- sapply(CellTypeStatSummary$pValue, function(x){
+    if(x < 0.05){
+      "Yes"
+    } else {
+      "No"
+    }
+  })
+  rownames(CellTypeStatSummary) <- names(StatData)
+  CellTypeStatSummary %<>% mutate(CellType = factor(rownames(.), levels = rownames(.)),
+                                  Model = Name)
+  return(CellTypeStatSummary)
+}
+
+CellTypeStatSummaryNoMSPcorrection <- GetConfInt(CellTypeStats, Name = "Agef and Sex adjusted")
+CellTypeStatSummaryNeuNallcorrection <- GetConfInt(CellTypeStats2, Name = "Agef, Sex and NeunAll adjusted")
+CellTypeStatSummaryNeuNallMicrogliacorrection <- GetConfInt(CellTypeStats3, Name = "Agef, Sex, NeunAll and Microglia adjusted")
+
+CellTypeStatSummaryCombined <- rbind(CellTypeStatSummaryNoMSPcorrection,
+                                     CellTypeStatSummaryNeuNallcorrection,
+                                     CellTypeStatSummaryNeuNallMicrogliacorrection)
+
+
+MethodsBoxplot_plot <- ggplot(EstimateMelt, aes(Group, Estimate)) +
+  theme_minimal(base_size = 14) +
+  theme(legend.position = "bottom", legend.title = element_blank(), legend.box.spacing = unit(-0.4, "cm"),
+        strip.text = element_text(face = "bold", size = 12)) +
+  labs(x = "") +
+  geom_boxplot(outlier.shape = NA, aes(fill = Group)) +
+  geom_jitter(height = 0, width = 0.2) +
+  scale_fill_manual(values = c("dodgerblue4" , "chocolate1")) +
+  geom_text(data = EstimateStat, aes(x = x, y = y, label = Text))+
+  facet_wrap(~Method, nrow = 1)
+
+MSPsCI_plot <- ggplot(CellTypeStatSummaryCombined, aes(CellType, Coeficient, color = Signif )) +
+  theme_minimal(base_size = 14) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 10),
+        axis.text.y = element_text(size = 10),
+        axis.title.y = element_text(size = 12),
+        strip.text = element_text(face = "bold")) +
+  labs(x = "", title = ) +
+  geom_hline(yintercept = 0, color = "red", linetype = 2, size = 0.9) +
+  geom_errorbar(aes(ymin = Low, ymax = High, size = Signif), show.legend = F) +
+  geom_point(size = 2, show.legend = F) +
+  scale_color_manual(values = c("black", "palevioletred3")) +
+  scale_size_manual(values = c(1, 1.2))+
+  facet_wrap(~Model, scales = "free", nrow = 3)
+
+
+Plot <- ggarrange(MethodsBoxplot_plot, MSPsCI_plot, widths = c(1.1,1), labels = c("a", "b"))
+ggsave(paste0("CellTypeDifferences", Cohort, ".pdf"), plot = Plot, scale = 1.3, device = "pdf", width = 10, height = 6, dpi = 300, useDingbats = F, path = ResultsPath)
 
 
 ############################# HTseq counts ######################################################################
@@ -161,101 +278,14 @@ CovarPvaluesMelt$Significant <- sapply(CovarPvaluesMelt$pValue, function(x){
 }) %>% factor(levels = c("No", "Yes"))
 
 Plot  <- ggplot(CovarPvaluesMelt, aes(PC, Variable)) +
-  theme_classic(base_size = 13) +
-  theme(axis.text.x.top = element_text(angle = 90, vjust=0.5, hjust=0)) +
+  theme_classic(base_size = 14) +
+  theme(axis.text.x.top = element_text(angle = 90, vjust=0.5, hjust=0), axis.text = element_text(size = 14)) +
   labs(x = "", y = "", title = "Association of variables with main PCs") +
   geom_tile(aes(fill = pPvalue), colour = "white") +
   scale_fill_gradient(high = "steelblue", low = "gray94", name = "-log10(p)") +
-  geom_text(aes(label = signif(pValue, 2), colour = Significant), show.legend = F) +
+  geom_text(aes(label = signif(pValue, 2), colour = Significant), show.legend = F, size = 5) +
   scale_color_manual(values = c("black", "red"))
 ggsave(paste0("AssociationWithPCs", Cohort, ".pdf"), plot = Plot, device = "pdf", width = 10, height = 8, dpi = 300, useDingbats = F, path = ResultsPath)
-
-
-#Look at the differences in the different estimated of cell types
-CellData <- countMatrixFullAllCalled$Metadata %>% select(-matches("__|Total")) %>% gather(matches("MSP|CETS$"), key = "CellType", value = "MSP") 
-CellData$CellType <- sapply(CellData$CellType, function(x) gsub("_MSP", "", x)) %>%
-  factor(levels = c("Astrocyte", "Endothelial", "Microglia", "Microglia_activation",
-                    "Microglia_deactivation","Oligo", "OligoPrecursors",
-                    "GabaVIPReln", "Pyramidal", "NeuNall","CETS"))
-CellData %<>% mutate(MSPnorm = MSP/MeanRatioOrg)
-
-
-#Get confidence intervals for differences in cell types
-
-#First round
-CellTypeStats <- sapply(levels(CellData$CellType), function(cellType){
-  Data = CellData %>% filter(CellType == cellType)
-  lm(MSP~Group + Sex + Agef, data = Data) 
-}, simplify = F)
-
-#Adjusting for differences in neurons, since they change across the groups
-CellData2 <- countMatrixFullAllCalled$Metadata %>% select(-matches("__|Total")) %>% gather(matches("MSP|CETS$"), -NeuNall_MSP, key = "CellType", value = "MSP") 
-CellData2$CellType <- sapply(CellData2$CellType, function(x) gsub("_MSP", "", x)) %>%
-  factor(levels = c("Astrocyte", "Endothelial", "Microglia", "Microglia_activation",
-                    "Microglia_deactivation","Oligo", "OligoPrecursors",
-                    "GabaVIPReln", "Pyramidal","CETS"))
-CellData2 %<>% mutate(MSPnorm = MSP/MeanRatioOrg)
-
-CellTypeStats2 <- sapply(levels(CellData2$CellType), function(cellType){
-  Data = CellData2 %>% filter(CellType == cellType)
-  lm(MSP~Group + Sex + Agef + NeuNall_MSP, data = Data) 
-}, simplify = F)
-
-#Adjusting for both neurons and miroglia (microglia is differential after adjustment for neurons)
-CellData3 <- countMatrixFullAllCalled$Metadata %>% select(-matches("__|Total")) %>% gather(matches("MSP|CETS$"), -NeuNall_MSP, -Microglia_MSP, key = "CellType", value = "MSP") 
-CellData3$CellType <- sapply(CellData3$CellType, function(x) gsub("_MSP", "", x)) %>%
-  factor(levels = c("Astrocyte", "Endothelial", "Microglia_activation",
-                    "Microglia_deactivation","Oligo", "OligoPrecursors",
-                    "GabaVIPReln", "Pyramidal","CETS"))
-CellData3 %<>% mutate(MSPnorm = MSP/MeanRatioOrg)
-
-CellTypeStats3 <- sapply(levels(CellData3$CellType), function(cellType){
-  Data = CellData3 %>% filter(CellType == cellType)
-  lm(MSP~Group + Sex + Agef + NeuNall_MSP + Microglia_MSP, data = Data) 
-}, simplify = F)
-
-
-GetConfInt <- function(StatData, Name){
-  CellTypeStatSummary <- lapply(StatData, function(x){
-    temp <- summary(x) %>% .$coef %>% .[2, c(1,4)]
-    temp2 <- confint(x) %>% .[2,]
-    out <- c(temp, temp2) %>% t
-    colnames(out) <- c("Coeficient", "pValue", "Low", "High")
-    out
-  }) %>% do.call(rbind, .) %>% data.frame()
-  CellTypeStatSummary$Signif <- sapply(CellTypeStatSummary$pValue, function(x){
-    if(x < 0.05){
-      "Yes"
-    } else {
-      "No"
-    }
-  })
-  rownames(CellTypeStatSummary) <- names(StatData)
-  CellTypeStatSummary %<>% mutate(CellType = factor(rownames(.), levels = rownames(.)),
-                                  Model = Name)
-  return(CellTypeStatSummary)
-}
-
-CellTypeStatSummaryNoMSPcorrection <- GetConfInt(CellTypeStats, Name = "Agef and Sex adjusted")
-CellTypeStatSummaryNeuNallcorrection <- GetConfInt(CellTypeStats2, Name = "Agef, Sex and NeunAll adjusted")
-CellTypeStatSummaryNeuNallMicrogliacorrection <- GetConfInt(CellTypeStats3, Name = "Agef, Sex, NeunAll and Microglia adjusted")
-
-CellTypeStatSummaryCombined <- rbind(CellTypeStatSummaryNoMSPcorrection,
-                                     CellTypeStatSummaryNeuNallcorrection,
-                                     CellTypeStatSummaryNeuNallMicrogliacorrection)
-
-
-Plot <- ggplot(CellTypeStatSummaryCombined, aes(CellType, Coeficient, color = Signif )) +
-  theme_minimal(base_size = 14) +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
-  labs(x = "", title = ) +
-  geom_point() +
-  geom_errorbar(aes(ymin = Low, ymax = High)) +
-  geom_hline(yintercept = 0, color = "red", linetype = 2) +
-  scale_color_manual(values = c("black", "chocolate1")) +
-  facet_wrap(~Model, scales = "free", nrow = 3)
-
-ggsave(paste0("CellTypeDifferences", Cohort, ".pdf"), plot = Plot, device = "pdf", width = 6, height = 8, dpi = 300, useDingbats = F, path = ResultsPath)
 
 
 
@@ -293,6 +323,19 @@ group_results <- topTags(qlf_group, n = Inf) %>% data.frame() %>% mutate(PeakNam
 groupResult_Anno <- group_results %>%
   AnnotDESeqResult(CountAnnoFile = AllCalledData$countsMatrixAnnot, by.x = "PeakName", by.y = "PeakName") %>% arrange(FDR)
 
+
+#Repeat with CETS as continues variable
+MarziModelMatrix_b <- model.matrix(as.formula("~Agef + CETS + Group"), data = Metadata)
+
+ADcountList_b <- estimateDisp(ADcountList, MarziModelMatrix_b)
+
+
+fitTMM_b <- glmQLFit(ADcountList_b, MarziModelMatrix_b)
+qlf_group_b <- glmQLFTest(fitTMM_b, coef = "GroupAD")
+group_results_b <- topTags(qlf_group_b, n = Inf) %>% data.frame() %>% mutate(PeakName = rownames(.))
+
+groupResult_Anno_b <- group_results_b %>%
+  AnnotDESeqResult(CountAnnoFile = AllCalledData$countsMatrixAnnot, by.x = "PeakName", by.y = "PeakName") %>% arrange(FDR)
 
 #Heatmap of significant peaks (Attempt to reproduce Fig. 4 from Marzi et al.)
 PlotPeakHeatmap <- function(data, meta, title){
@@ -343,7 +386,21 @@ PlotPeakHeatmap(SignifCETSTMMhypo, Metadata, title = "CETs_Hypo")
 
 
 
-#Repeat after adjusting also for neurons, microglia and oligos
+#Repeat after adjusting for MSPs
+#First - similar to CETS
+MarziModelMatrixMSP_f <- model.matrix(as.formula("~Agef + NeuNall_MSPif + Group"), data = countMatrixFullAllCalled$Metadata)
+
+ADcountList2_f <- estimateDisp(ADcountList, MarziModelMatrixMSP_f)
+
+fitTMM_MSP_f <- glmQLFit(ADcountList2_f, MarziModelMatrixMSP_f)
+qlf_groupMSP_f <- glmQLFTest(fitTMM_MSP_f, coef = "GroupAD")
+group_resultsMSP_f <- topTags(qlf_groupMSP_f, n = Inf) %>% data.frame() %>% mutate(PeakName = rownames(.)) 
+
+
+groupResult_MSPAnno_f <- group_resultsMSP_f %>%
+  AnnotDESeqResult(CountAnnoFile = AllCalledData$countsMatrixAnnot, by.x = "PeakName", by.y = "PeakName") %>% arrange(FDR)
+
+#Now all relevant MSPs as continuous
 MarziModelMatrixMSP <- model.matrix(as.formula("~Agef + NeuNall_MSP + Microglia_MSP + Oligo_MSP + Group"), data = countMatrixFullAllCalled$Metadata)
 
 ADcountList2 <- estimateDisp(ADcountList, MarziModelMatrixMSP)
@@ -389,15 +446,40 @@ CompareResultsDF$MethodSignif <- factor(CompareResultsDF$MethodSignif, levels = 
 
 ggplot(CompareResultsDF, aes(logFC_CETs, logFC_MSP)) +
   theme_minimal() +
-  geom_point(aes(color = MethodSignif), alpha = 0.5) +
+  stat_bin2d(data = CompareResultsDF %>% filter(MethodSignif == "NS"), bins = 500, fill = "grey80") +
+  #geom_point(aes(color = MethodSignif)) +
   geom_point(data = CompareResultsDF[CompareResultsDF$MethodSignif == "CETs",], color = "orange") +
-  geom_point(data = CompareResultsDF[CompareResultsDF$MethodSignif == "MSP",], color = "darkgreen") +
+  geom_point(data = CompareResultsDF[CompareResultsDF$MethodSignif == "MSP",], color = "darkolivegreen4") +
   geom_point(data = CompareResultsDF[CompareResultsDF$MethodSignif == "Both",], color = "purple") +
-  scale_color_manual(values = c("darkgrey", "orange", "darkgreen", "purple")) +
-  geom_abline(slope = 1, intercept = 0, color = "blue")
-ggsave(paste0("MethodComparison.tif"), device = "tiff", width = 8, height = 6, dpi = 300, path = ResultsPath)
+  scale_color_manual(values = c("grey80", "orange", "darkolivegreen4", "purple")) +
+  geom_abline(slope = 1, intercept = 0, color = "black", linetype = 2) +
+  geom_hline(yintercept = 0) +
+  geom_vline(xintercept = 0)
 
 
+ggsave("MethodComparison.pdf", device = "pdf", width = 8, height = 6, dpi = 300, path = ResultsPath, useDingbats = F)
+
+
+VennData <- CompareResultsDF %>% filter(MethodSignif != "NS") %>%  select(FDR_CETs, FDR_MSP)
+VennData$Signif_CETS <- sapply(VennData$FDR_CETs, function(x){
+  if(x < 0.05){
+    1
+  } else {
+    0
+  }
+})
+
+VennData$Signif_MSP <- sapply(VennData$FDR_MSP, function(x){
+  if(x < 0.05){
+    1
+  } else {
+    0
+  }
+})
+
+pdf(paste0(ResultsPath,"VennDiagram.pdf"),width = 6, height = 4.5, useDingbats = F)
+venn(VennData  %>% select(matches("Signif")), box = F, zcolor = c("darkorange", "darkorchid4"), opacity = 0.7, ilcs = 1.5, ilabels = T)
+closeDev()
 
 #Find Overlaps
 SignifCETS <- group_results %>% filter(FDR < 0.05)
@@ -411,98 +493,11 @@ UniquePeakMSP <- groupResult_MSPAnno %>% filter(PeakName %in% UniquePeakMSP$Peak
 UniquePeakCETS <- SignifCETS %>% filter(!PeakName %in% SignifMSP$PeakName)
 
 
-#Run the analysis similar to PD pipeline
-Model = as.formula("~Agef + NeuNall_MSP + Microglia_MSP + Oligo_MSP + Group")
-DESeqOutAll_Full <- RunDESeq(data = countMatrixFullAllCalled$countMatrix, UseModelMatrix = T, MetaSamleCol = "GSM", SampleNameCol = "GSM", 
-                             meta = countMatrixFullAllCalled$Metadata, normFactor = "MeanRatioOrg", sampleToFilter = "none",
-                             FullModel = Model, test = "Wald", FitType = "local")
-
-DESegResultsGroup_FullAll <- GetDESeqResults(DESeqOutAll_Full, coef = "GroupAD") %>% AnnotDESeqResult(CountAnnoFile = AllCalledData$countsMatrixAnnot, by.x = "PeakName", by.y = "PeakName")
-
-DESegResultsGroup_FullAll$ADgene <- "No"
-DESegResultsGroup_FullAll$ADgene[as.character(DESegResultsGroup_FullAll$symbol) %in% as.character(ADgene$Gene)] <- "Yes"
-DESegResultsGroup_FullAll$PDgene <- "No"
-DESegResultsGroup_FullAll$PDgene[as.character(DESegResultsGroup_FullAll$symbol) %in% as.character(PDgene$Gene)] <- "Yes"
-
-DESegResultsGroup_FullAll %<>% mutate(pPvalue  = -log10(pvalue))
-ggplot(DESegResultsGroup_FullAll, aes(PDgene, pPvalue)) +
-  geom_boxplot() +
-  geom_violin()
-
-ggplot(DESegResultsGroup_FullAll, aes(ADgene, pPvalue)) +
-  geom_boxplot() +
-  geom_violin()
-
-## Rerun with RLE normalization
-DESeqOutAll_Full_RLE <- RunDESeq(data = countMatrixFullAllCalled$countMatrix, UseModelMatrix = T, MetaSamleCol = "GSM", SampleNameCol = "GSM", 
-                                 meta = countMatrixFullAllCalled$Metadata, normFactor = NULL, sampleToFilter = "none",
-                                 FullModel = Model, test = "Wald", FitType = "local")
-
-DESegResultsGroup_FullAll_RLE <- GetDESeqResults(DESeqOutAll_Full_RLE, coef = "GroupAD") %>% AnnotDESeqResult(CountAnnoFile = AllCalledData$countsMatrixAnnot, by.x = "PeakName", by.y = "PeakName")
-
-
-#Identify top genes
-ModifiedDF <- DESegResultsGroup_FullAll
-ModifiedDF$type <- sapply(ModifiedDF$type, function(x){
-  rev(strsplit(x, "_")[[1]])[1]
-}) %>% factor(levels = c("promoters", "exons", "5UTRs", "3UTR", "1to5kb","intronexonboundaries", "introns", "intergenic"))
-ModifiedDF %<>% mutate(AnnoOrder = type)
-levels(ModifiedDF$AnnoOrder) <- c(1:length(levels(ModifiedDF$AnnoOrder)))
-ModifiedDF %<>% arrange(AnnoOrder) 
-ModifiedDF %<>% filter(!duplicated(Peak_Gene))
-
-SignifGenes <- ModifiedDF %>% filter(padj < 0.05) %>% .$symbol %>% unique
-ModifiedDF %<>% filter(symbol %in% SignifGenes, !is.na(symbol), !is.na(padj))
-
-
-TopGenes <- sapply(unique(ModifiedDF$symbol), function(gene){
-  GenePeaks <- ModifiedDF %>% filter(symbol == gene)
-  GenePeaks %<>% mutate(Adj2 = p.adjust(.$padj, method = "BH"))
-  TotalPeaks <- nrow(GenePeaks)
-  UpPeaks <- sum(GenePeaks$log2FoldChange > 0)
-  DownPeaks <- sum(GenePeaks$log2FoldChange < 0)
-  TopList <- if(UpPeaks/TotalPeaks == 1 | DownPeaks/TotalPeaks == 1 | "promoters" %in% c(GenePeaks %>%
-                                                                                          filter(padj < 0.05) %>%
-                                                                                          .$type %>% as.character())){
-    "Yes"
-  } else {
-    "No"
-  }
-  NomSignif = sum(GenePeaks$pvalue < 0.05)
-  AdjSignif = sum(GenePeaks$padj < 0.05)
-  PromoterSignif <- if("promoters" %in% c(GenePeaks %>% filter(padj < 0.05) %>% .$type %>% as.character())){
-    "Yes"
-  } else if("promoters" %in% c(GenePeaks %>% filter(padj > 0.05) %>% .$type %>% as.character())){
-    "No"
-  } else {
-    NA
-  }
-  Direction <- if(sum(GenePeaks$log2FoldChange) > 0){
-    "Up"
-  } else {
-    "Down"
-  }
-  data.frame(GeneSymbol = gene,
-             TotalPeaks = TotalPeaks,
-             TopList = TopList,
-             NomSignif = NomSignif,
-             AdjSignif = AdjSignif,
-             PromoterSignif = PromoterSignif,
-             UpPeaks = UpPeaks,
-             DownPeaks = DownPeaks,
-             Direction = Direction,
-             TopP = min(GenePeaks$Adj2)) %>% mutate(NomSignifProp = round(NomSignif/TotalPeaks, digits = 2),
-                                               AdjSignifProp = round(AdjSignif/TotalPeaks, digits = 2))
-}, simplify = F) %>% do.call(rbind, .) 
-
-
-TopGenes %<>% filter(TopList == "Yes") %>% .[!grepl("^MIR|^SNOR", .$GeneSymbol),]
 
 save.image(paste0(ResultsPath, Cohort, ".Rdata"))
-saveRDS(DESeqOutAll_Full, file = paste0(ResultsPath, Cohort, "DEoutput.Rds"))
-saveRDS(DESeqOutAll_Full_RLE, file = paste0(ResultsPath, Cohort, "DEoutputRLE.Rds"))
-saveRDS(DESegResultsGroup_FullAll, file = paste0(ResultsPath, Cohort, "DEresults.Rds"))
-saveRDS(DESegResultsGroup_FullAll_RLE, file = paste0(ResultsPath, Cohort, "DEresultsRLE.Rds"))
+saveRDS(DESeqOutAll_Full@colData, "Data/Metada.Rds")
 saveRDS(groupResult_Anno, file = paste0(ResultsPath, Cohort, "edgeR_CETs.Rds"))
+saveRDS(groupResult_Anno_b, file = paste0(ResultsPath, Cohort, "edgeR_CETs_b.Rds"))
 saveRDS(groupResult_MSPAnno, file = paste0(ResultsPath, Cohort, "edgeR_MSP.Rds"))
+saveRDS(groupResult_MSPAnno_f, file = paste0(ResultsPath, Cohort, "edgeR_MSPneuronAsFactor.Rds"))
 closeDev()

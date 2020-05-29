@@ -111,59 +111,45 @@ CellTypeResult_Anno <- CellType_results %>%
 ResultsMarziCETs <- readRDS("Results/MarziedgeR_CETs.Rds")
 ResultsMarziCETs_b <- readRDS("Results/MarziedgeR_CETs_b.Rds")
 ResultsMarziMSP <- readRDS("Results/MarziedgeR_MSP.Rds")
+ResultsMarziMSPneuronal <- readRDS("Results/MarziedgeR_MSPneuronAsFactor.Rds")
+
 ###########################################################
 
 SignifCETS <- ResultsMarziCETs %>% filter(FDR < 0.05, !duplicated(PeakName)) %>% select(PeakName, logCPM, logFC, PValue, FDR)
-SignifMSP <- ResultsMarziMSP %>% filter(FDR < 0.05, !duplicated(PeakName)) %>% select(PeakName, logCPM, logFC, PValue, FDR)
+SignifMSPall <- ResultsMarziMSP %>% filter(FDR < 0.05, !duplicated(PeakName)) %>% select(PeakName, logCPM, logFC, PValue, FDR)
+SignifMSPneuronF <- ResultsMarziMSPneuronal %>% filter(FDR < 0.05, !duplicated(PeakName)) %>% select(PeakName, logCPM, logFC, PValue, FDR)
+
+SignifMarzi <- list(SignifCETS, SignifMSPneuronF, SignifMSPall)
+names(SignifMarzi) <- c("CETs", "MSPneuronF", "MSPall")
+
+CellType_resultsSignifMarzi <- sapply(names(SignifMarzi), function(Mod){
+  temp <- CellType_results %>% filter(PeakName %in% SignifMarzi[[Mod]]$PeakName)
+  temp$MethodSignif = Mod
+  temp$DirectictionChange <- sapply(temp$PeakName, function(x){
+    if(SignifMarzi[[Mod]] %>% filter(PeakName == x) %>% .$logFC < 0){
+      "Hypoacetylated"
+    } else if(SignifMarzi[[Mod]] %>% filter(PeakName == x) %>% .$logFC > 0){
+      "Hyperacetylated"
+    }
+  })
+  temp$logFC_AD <- SignifMarzi[[Mod]]$logFC[match(temp$PeakName, SignifMarzi[[Mod]]$PeakName)]
+  temp
+}, simplify = F) %>% rbindlist()
 
 
-CellType_resultsSignifMarziCETS <- CellType_results %>% filter(PeakName %in% SignifCETS$PeakName)
-CellType_resultsSignifMarziCETS$MethodSignif = "CETs"
-CellType_resultsSignifMarziCETS$DirectictionChange <- sapply(CellType_resultsSignifMarziCETS$PeakName, function(x){
-  if(SignifCETS %>% filter(PeakName == x) %>% .$logFC < 0){
-    "Hypoacetylated"
-  } else if(SignifCETS %>% filter(PeakName == x) %>% .$logFC > 0){
-    "Hyperacetylated"
-  }
-})
-CellType_resultsSignifMarziCETS$logFC_AD <- SignifCETS$logFC[match(CellType_resultsSignifMarziCETS$PeakName, SignifCETS$PeakName)]
-
-
-CellType_resultsSignifMarziMSP <- CellType_results %>% filter(PeakName %in% SignifMSP$PeakName)
-CellType_resultsSignifMarziMSP$MethodSignif = "MSP"
-CellType_resultsSignifMarziMSP$DirectictionChange <- sapply(CellType_resultsSignifMarziMSP$PeakName, function(x){
-  if(SignifMSP %>% filter(PeakName == x) %>% .$logFC < 0){
-    "Hypoacetylated"
-  } else if(SignifMSP %>% filter(PeakName == x) %>% .$logFC > 0){
-    "Hyperacetylated"
-  }
-})
-CellType_resultsSignifMarziMSP$logFC_AD <- SignifMSP$logFC[match(CellType_resultsSignifMarziMSP$PeakName, SignifMSP$PeakName)]
-
-
-
-CellType_resultsSignifMarzi <- rbind(CellType_resultsSignifMarziCETS, CellType_resultsSignifMarziMSP)
 CellType_resultsSignifMarzi$DirectictionChange <- factor(CellType_resultsSignifMarzi$DirectictionChange, levels = c("Hypoacetylated", "Hyperacetylated"))
+CellType_resultsSignifMarzi$MethodSignif <- factor(CellType_resultsSignifMarzi$MethodSignif, levels = c("CETs", "MSPneuronF", "MSPall"))
 
-ggplot(CellType_resultsSignifMarzi, aes(DirectictionChange, logFC, color = DirectictionChange)) +
-  theme_minimal() +
-  labs(x = "", y = "logFC (Neurons vs. Glia)") +
-  geom_violin(aes(fill = DirectictionChange)) +
-  geom_boxplot(width = 0.2)+
-  scale_color_manual(values =  c("chartreuse4", "orange")) +
-  scale_fill_manual(values =  c("chartreuse4", "orange")) +
-  geom_hline(yintercept = 0, color = "red") +
-  facet_wrap(~MethodSignif)
-
-ggsave(paste0("MethodComparisonBoxplot.pdf"), device = "pdf", width = 8, height = 6, dpi = 300, path = ResultsPath)
 
 
 AllResults <- rbind((ResultsMarziCETs %>% select(PeakName, logFC, FDR) %>% filter(!duplicated(PeakName)) %>% mutate(Method = "CETs")),
-                    ResultsMarziMSP %>% select(PeakName, logFC, FDR) %>% filter(!duplicated(PeakName)) %>% mutate(Method = "MSP"))
+                    ResultsMarziMSPneuronal %>% select(PeakName, logFC, FDR) %>% filter(!duplicated(PeakName)) %>% mutate(Method = "MSPneuronF"),
+                    ResultsMarziMSP %>% select(PeakName, logFC, FDR) %>% filter(!duplicated(PeakName)) %>% mutate(Method = "MSPall"))
 
 AllResults <- merge(AllResults, CellType_results %>% select(PeakName, logFC, FDR), by = "PeakName", suffixes = c("_AD", "_Neurons"))
+AllResults$Method <- factor(AllResults$Method, levels = c("CETs", "MSPneuronF", "MSPall"))
 
-CorDF <- data.frame(Method = c("CETs", "MSP"),
+CorDF <- data.frame(Method = c("CETs", "MSPneuronF", "MSPall"),
                     x1 = -6, y1 = 2,
                     x2 = -6, y2 = 1.8)
 
@@ -180,8 +166,22 @@ CorDF$CorSignif <- sapply(CorDF$Method, function(method){
 CorDF %<>% mutate(Text = paste0("'r'[italic('All peaks')] ", "*", "' = '", CorAll))
 CorDF %<>% mutate(Text2 = paste0("'r'[italic('Significant peaks')] ", "*", "' = '", CorSignif))
 
-ggplot(AllResults, aes(logFC_Neurons, logFC_AD)) +
+
+Plot1 <- ggplot(CellType_resultsSignifMarzi, aes(DirectictionChange, logFC)) +
   theme_classic() +
+  theme(axis.text.x = element_blank(), legend.position = c(0.5,-0.05),
+        legend.direction = "horizontal", legend.background = element_blank()) +
+  labs(x = "", y = "logFC (Neurons vs. Glia)") +
+  geom_violin(aes(fill = DirectictionChange)) +
+  geom_boxplot(width = 0.2, outlier.shape = NA)+
+  #scale_color_manual(values =  c("aquamarine4", "darkorchid4"), name = "") +
+  scale_fill_manual(values =  c("darkseagreen", "darkorchid4"), name = "") +
+  geom_hline(yintercept = 0, color = "red") +
+  facet_wrap(~MethodSignif)
+
+Plot2 <- ggplot(AllResults, aes(logFC_Neurons, logFC_AD)) +
+  theme_classic() +
+  #theme(legend.position = "top") +
   labs(x = "logFC (Neurons vs. Glia)") +
   stat_bin2d(bins = 100) +
   geom_point(data = AllResults %>% filter(FDR_AD < 0.05), color = "orange", alpha = 0.4) +
@@ -190,23 +190,10 @@ ggplot(AllResults, aes(logFC_Neurons, logFC_AD)) +
   geom_text(data = CorDF, aes(x = x1, y = y1, label = Text), parse = T, hjust = 0) +
   geom_text(data = CorDF, aes(x = x2, y = y2, label = Text2), parse = T, hjust = 0) +
   facet_wrap(~Method)
-ggsave(paste0("MethodComparisonScatter.pdf"), device = "pdf", width = 8, height = 5, dpi = 300, path = ResultsPath)
 
-#Get correlations for model with CETS as continuous variable 
+ggarrange(Plot1, Plot2, nrow = 1, widths = c(1,1.8), heights = c(1.1,1))
+ggsave(paste0("MethodComparison.pdf"), device = "pdf", width = 12, height = 3, dpi = 300, path = ResultsPath, useDingbats = F)
 
-CETS_continuousCells <- merge(ResultsMarziCETs_b %>% select(PeakName, logFC, FDR) %>% filter(!duplicated(PeakName)),
-                              CellType_results %>% select(PeakName, logFC, FDR), by = "PeakName", suffixes = c("_AD", "_Neurons"))
-
-cor.test(~logFC_AD + logFC_Neurons, data = CETS_continuousCells)
-cor.test(~logFC_AD + logFC_Neurons, data = CETS_continuousCells %>% filter(FDR_AD < 0.05))
-
-ggplot(A, aes(logFC_Neurons, logFC_AD)) +
-  theme_classic() +
-  labs(x = "logFC (Neurons vs. Glia)") +
-  stat_bin2d(bins = 100) +
-  geom_point(data = CETS_continuousCells %>% filter(FDR_AD < 0.05), color = "orange", alpha = 0.4) +
-  geom_hline(yintercept = 0, color = "white") +
-  geom_vline(xintercept = 0, color = "white")
 
 #Get the TMM psudo counts
 

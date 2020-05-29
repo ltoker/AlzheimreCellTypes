@@ -324,18 +324,6 @@ groupResult_Anno <- group_results %>%
   AnnotDESeqResult(CountAnnoFile = AllCalledData$countsMatrixAnnot, by.x = "PeakName", by.y = "PeakName") %>% arrange(FDR)
 
 
-#Repeat with CETS as continues variable
-MarziModelMatrix_b <- model.matrix(as.formula("~Agef + CETS + Group"), data = Metadata)
-
-ADcountList_b <- estimateDisp(ADcountList, MarziModelMatrix_b)
-
-
-fitTMM_b <- glmQLFit(ADcountList_b, MarziModelMatrix_b)
-qlf_group_b <- glmQLFTest(fitTMM_b, coef = "GroupAD")
-group_results_b <- topTags(qlf_group_b, n = Inf) %>% data.frame() %>% mutate(PeakName = rownames(.))
-
-groupResult_Anno_b <- group_results_b %>%
-  AnnotDESeqResult(CountAnnoFile = AllCalledData$countsMatrixAnnot, by.x = "PeakName", by.y = "PeakName") %>% arrange(FDR)
 
 #Heatmap of significant peaks (Attempt to reproduce Fig. 4 from Marzi et al.)
 PlotPeakHeatmap <- function(data, meta, title){
@@ -459,9 +447,61 @@ ggplot(CompareResultsDF, aes(logFC_CETs, logFC_MSP)) +
 
 ggsave("MethodComparison.pdf", device = "pdf", width = 8, height = 6, dpi = 300, path = ResultsPath, useDingbats = F)
 
+#Combijne all four together
 
-VennData <- CompareResultsDF %>% filter(MethodSignif != "NS") %>%  select(FDR_CETs, FDR_MSP)
-VennData$Signif_CETS <- sapply(VennData$FDR_CETs, function(x){
+
+temp <- merge(group_resultsMSP %>% select(PeakName, logFC, FDR),
+              group_resultsMSP_f %>% select(PeakName, logFC, FDR),
+              by = "PeakName", suffixes = c("_MSPall", "_MSPneuronF"))
+
+AllThreeCombined <- merge(group_results %>% select(PeakName, logFC, FDR), temp, by = "PeakName")
+names(AllThreeCombined)[names(AllThreeCombined) %in% c("logFC", "FDR")] <- paste0(names(AllThreeCombined)[names(AllThreeCombined) %in% c("logFC", "FDR")], "_CETs")
+
+AllThreeCombined <- pivot_longer(AllThreeCombined, col = -matches("PeakName|_CETs"),
+                      names_to = c(".value", "Method"), names_pattern = "(.*)_(.*)") %>% data.frame()
+
+AllThreeCombined$MethodSignif <- apply(AllThreeCombined %>% select(FDR_CETs, FDR, Method), 1, function(x){
+  if(x[1] < 0.05 & x[2] < 0.05){
+    "Both"
+  } else if (x[1] > 0.05 & x[2] > 0.05) {
+    "NS"
+  } else if(x[1] < 0.05 & x[2] > 0.05 ){
+    "CETs"
+  } else if(x[1] > 0.05 & x[2] < 0.05){
+    "Alternative"
+  }
+})
+
+AllThreeCombined$Method <- factor(AllThreeCombined$Method, levels = c("CETs", "MSPneuronF", "MSPall"))
+AllThreeCombined$MethodSignif <- factor(AllThreeCombined$MethodSignif, levels = c("NS", "CETs", "Alternative", "Both"))
+
+
+cor.test(~logFC_CETs + logFC, data = AllThreeCombined %>% filter(FDR_CETs < 0.05, Method == "MSPneuronF"))
+cor.test(~logFC_CETs + logFC, data = AllThreeCombined %>% filter(FDR_CETs < 0.05, Method == "MSPall"))
+
+cor.test(~logFC_CETs + logFC, data = AllThreeCombined %>% filter(FDR < 0.05, Method == "MSPall"))
+
+
+ggplot(AllThreeCombined, aes(logFC_CETs, logFC)) +
+  theme_minimal() +
+  theme(legend.background = element_blank()) +
+  labs(x = "logFC_AD (CETs)", y = "logFC_AD (MSP)") +
+  geom_bin2d(bins = 100) +
+  #geom_point(aes(color = MethodSignif)) +
+  geom_point(data = AllThreeCombined %>% filter(FDR_CETs < 0.05), color = "orange", alpha = 0.2) +
+  # geom_point(data = AllFourCombined %>% filter(FDR_MSPneuronalAsFactor < 0.05, FDR_CETS > 0.05), color = "darkolivegreen4") +
+  # geom_point(data = AllFourCombined %>% filter(FDR_MSPneuronalAsFactor < 0.05, FDR_CETS < 0.05), color = "purple") +
+  #scale_fill_manual(values = c("grey80", "orange",  "darkolivegreen4", "purple")) +
+  geom_abline(slope = 1, intercept = 0, color = "black", linetype = 2) +
+  geom_hline(yintercept = 0) +
+  geom_vline(xintercept = 0) +
+  facet_wrap(~Method, ncol = 3)
+
+
+
+
+VennData <- AllThreeCombined %>% filter(MethodSignif != "NS")  %>%  select(FDR_CETs, FDR, Method, PeakName)
+VennData$Signif_CETs <- sapply(VennData$FDR_CETs, function(x){
   if(x < 0.05){
     1
   } else {
@@ -469,16 +509,21 @@ VennData$Signif_CETS <- sapply(VennData$FDR_CETs, function(x){
   }
 })
 
-VennData$Signif_MSP <- sapply(VennData$FDR_MSP, function(x){
+VennData$Signif_Alternative <- sapply(VennData$FDR, function(x){
   if(x < 0.05){
     1
   } else {
     0
   }
 })
+
+VennData <- pivot_wider(VennData %>% select(-FDR), names_from = Method,
+                        values_from =  Signif_Alternative,
+                        names_prefix = "Signif_", values_fill = list(Signif_Alternative = 0)) %>% data.frame()
+
 
 pdf(paste0(ResultsPath,"VennDiagram.pdf"),width = 6, height = 4.5, useDingbats = F)
-venn(VennData  %>% select(matches("Signif")), box = F, zcolor = c("darkorange", "darkorchid4"), opacity = 0.7, ilcs = 1.5, ilabels = T)
+venn(VennData  %>% select(matches("Signif")), box = F, opacity = 0.4, ilcs = 1.5, ilabels = T, zcolor = "style")
 closeDev()
 
 #Find Overlaps

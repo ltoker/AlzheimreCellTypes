@@ -432,32 +432,18 @@ CompareResultsDF$MethodSignif <- apply(CompareResultsDF %>% select(FDR_CETs, FDR
 CompareResultsDF$MethodSignif <- factor(CompareResultsDF$MethodSignif, levels = c("NS", "CETs", "MSP", "Both"))
 
 
-ggplot(CompareResultsDF, aes(logFC_CETs, logFC_MSP)) +
-  theme_minimal() +
-  stat_bin2d(data = CompareResultsDF %>% filter(MethodSignif == "NS"), bins = 500, fill = "grey80") +
-  #geom_point(aes(color = MethodSignif)) +
-  geom_point(data = CompareResultsDF[CompareResultsDF$MethodSignif == "CETs",], color = "orange") +
-  geom_point(data = CompareResultsDF[CompareResultsDF$MethodSignif == "MSP",], color = "darkolivegreen4") +
-  geom_point(data = CompareResultsDF[CompareResultsDF$MethodSignif == "Both",], color = "purple") +
-  scale_color_manual(values = c("grey80", "orange", "darkolivegreen4", "purple")) +
-  geom_abline(slope = 1, intercept = 0, color = "black", linetype = 2) +
-  geom_hline(yintercept = 0) +
-  geom_vline(xintercept = 0)
-
-
-ggsave("MethodComparison.pdf", device = "pdf", width = 8, height = 6, dpi = 300, path = ResultsPath, useDingbats = F)
-
 #Combijne all four together
 
 
-temp <- merge(group_resultsMSP %>% select(PeakName, logFC, FDR),
-              group_resultsMSP_f %>% select(PeakName, logFC, FDR),
-              by = "PeakName", suffixes = c("_MSPall", "_MSPneuronF"))
+temp <- merge(group_resultsMSP_f %>% select(PeakName, logFC, FDR),
+              group_resultsMSP %>% select(PeakName, logFC, FDR),
+              by = "PeakName", suffixes = c("_MSPneuronF", "_MSPall"))
 
-AllThreeCombined <- merge(group_results %>% select(PeakName, logFC, FDR), temp, by = "PeakName")
-names(AllThreeCombined)[names(AllThreeCombined) %in% c("logFC", "FDR")] <- paste0(names(AllThreeCombined)[names(AllThreeCombined) %in% c("logFC", "FDR")], "_CETs")
 
-AllThreeCombined <- pivot_longer(AllThreeCombined, col = -matches("PeakName|_CETs"),
+AllThreeCombinedSup <- merge(group_results %>% select(PeakName, logFC, FDR), temp, by = "PeakName")
+names(AllThreeCombinedSup)[names(AllThreeCombinedSup) %in% c("logFC", "FDR")] <- paste0(names(AllThreeCombinedSup)[names(AllThreeCombinedSup) %in% c("logFC", "FDR")], "_CETs")
+
+AllThreeCombined <- pivot_longer(AllThreeCombinedSup, col = -matches("PeakName|_CETs"),
                       names_to = c(".value", "Method"), names_pattern = "(.*)_(.*)") %>% data.frame()
 
 AllThreeCombined$MethodSignif <- apply(AllThreeCombined %>% select(FDR_CETs, FDR, Method), 1, function(x){
@@ -476,11 +462,22 @@ AllThreeCombined$Method <- factor(AllThreeCombined$Method, levels = c("CETs", "M
 AllThreeCombined$MethodSignif <- factor(AllThreeCombined$MethodSignif, levels = c("NS", "CETs", "Alternative", "Both"))
 
 
-cor.test(~logFC_CETs + logFC, data = AllThreeCombined %>% filter(FDR_CETs < 0.05, Method == "MSPneuronF"))
-cor.test(~logFC_CETs + logFC, data = AllThreeCombined %>% filter(FDR_CETs < 0.05, Method == "MSPall"))
+CorDF <- data.frame(Method = c("MSPneuronF", "MSPall"),
+                    x1 = 0.2, y1 = 2.5,
+                    x2 = 0.2, y2 = 2.2)
 
-cor.test(~logFC_CETs + logFC, data = AllThreeCombined %>% filter(FDR < 0.05, Method == "MSPall"))
+CorDF$CorAll <- sapply(CorDF$Method, function(method){
+  temp <- cor.test(~logFC_CETs + logFC, data = AllThreeCombined %>% filter(Method == as.character(method)))
+  round(temp$estimate, digits = 2)
+})
 
+CorDF$CorSignif <- sapply(CorDF$Method, function(method){
+  temp <- cor.test(~logFC_CETs + logFC, data = AllThreeCombined %>% filter(Method == as.character(method), FDR_CETs < 0.05))
+  round(temp$estimate, digits = 2)
+})
+
+CorDF %<>% mutate(Text = paste0("'r'[italic('All peaks')] ", "*", "' = '", "*", CorAll))
+CorDF %<>% mutate(Text2 = paste0("'r'[italic('CETs significant peaks')] ", "*", "' = '", "*", CorSignif))
 
 ggplot(AllThreeCombined, aes(logFC_CETs, logFC)) +
   theme_minimal() +
@@ -492,9 +489,11 @@ ggplot(AllThreeCombined, aes(logFC_CETs, logFC)) +
   # geom_point(data = AllFourCombined %>% filter(FDR_MSPneuronalAsFactor < 0.05, FDR_CETS > 0.05), color = "darkolivegreen4") +
   # geom_point(data = AllFourCombined %>% filter(FDR_MSPneuronalAsFactor < 0.05, FDR_CETS < 0.05), color = "purple") +
   #scale_fill_manual(values = c("grey80", "orange",  "darkolivegreen4", "purple")) +
-  geom_abline(slope = 1, intercept = 0, color = "black", linetype = 2) +
+  geom_abline(slope = 1, intercept = 0, color = "red", linetype = 2) +
   geom_hline(yintercept = 0) +
   geom_vline(xintercept = 0) +
+  geom_text(data = CorDF, aes(x = x1, y = y1, label = Text), parse = T, hjust = 0) +
+  geom_text(data = CorDF, aes(x = x2, y = y2, label = Text2), parse = T, hjust = 0) +
   facet_wrap(~Method, ncol = 3)
 
 
@@ -536,7 +535,12 @@ UniquePeakMSP <- SignifMSP %>% filter(!PeakName %in% SignifCETS$PeakName)
 UniquePeakMSP <- groupResult_MSPAnno %>% filter(PeakName %in% UniquePeakMSP$PeakName) %>% select(PeakName, logFC, logCPM, PValue, FDR, symbol, Peak_Gene, GeneAnnoType, Peak.width, Peak.Location)
 
 UniquePeakCETS <- SignifCETS %>% filter(!PeakName %in% SignifMSP$PeakName)
+AllThreeCombinedSup
 
+AllThreeCombinedSup <- merge(HTseqCounts %>% select(Geneid, CHR, START, END), AllThreeCombinedSup %>% filter(FDR_CETs < 0.05 | FDR_MSPneuronF < 0.05 | FDR_MSPall < 0.05),
+                             by.x = "Geneid", by.y = "PeakName") %>% data.frame %>% arrange(FDR_CETs)
+
+write.table(AllThreeCombinedSup, "Results/AllThreeCombinedSup.tsv", row.names = F, col.names = T, sep = "\t")
 
 
 save.image(paste0(ResultsPath, Cohort, ".Rdata"))

@@ -592,4 +592,6 @@ saveRDS(groupResult_MSPAnno, file = paste0(ResultsPath, Cohort, "edgeR_MSP.Rds")
 saveRDS(groupResult_MSPAnno_f, file = paste0(ResultsPath, Cohort, "edgeR_MSPneuronAsFactor.Rds"))
 saveRDS(groupResult_Anno_No, file = paste0(ResultsPath, Cohort, "edgeR_NoCellCorretction.Rds"))
 saveRDS(groupResult_Anno_Random, file = paste0(ResultsPath, Cohort, "edgeR_CETsRandom.Rds"))
+saveRDS(CombinedAll, file = paste0(ResultsPath, Cohort, "AllfiveModels.Rds"))
+
 closeDev()

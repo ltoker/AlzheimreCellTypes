@@ -542,10 +542,54 @@ AllThreeCombinedSup <- merge(HTseqCounts %>% select(Geneid, CHR, START, END), Al
 write.table(AllThreeCombinedSup, paste0(ResultsPath, "Supplementary tableS1.tsv"), row.names = F, col.names = T, sep = "\t")
 
 
+#Run without cell correction
+MarziModelMatrixNoCell <- model.matrix(as.formula("~Agef + Group"), data = countMatrixFullAllCalled$Metadata)
+
+ADcountList2_No <- estimateDisp(ADcountList, MarziModelMatrixNoCell)
+
+fitTMM_No <- glmQLFit(ADcountList2_No, MarziModelMatrixNoCell)
+qlf_group_No <- glmQLFTest(fitTMM_No, coef = "GroupAD")
+group_results_No <- topTags(qlf_group_No, n = Inf) %>% data.frame() %>% mutate(PeakName = rownames(.)) 
+
+
+groupResult_Anno_No <- group_results_No %>%
+  AnnotDESeqResult(CountAnnoFile = AllCalledData$countsMatrixAnnot, by.x = "PeakName", by.y = "PeakName") %>% arrange(FDR)
+
+
+#Run with randomly assigning CETs inside a group 
+
+MetaDummy <- countMatrixFullAllCalled$Metadata
+MetaDummy$CETSif[MetaDummy$Group == "AD"] <- sample(MetaDummy$CETSif[MetaDummy$Group == "AD"], 24, replace = F)
+MetaDummy$CETSif[MetaDummy$Group == "Control"] <- sample(MetaDummy$CETSif[MetaDummy$Group == "Control"], 23, replace = F)
+
+MarziModelMatrixRandomCell <- model.matrix(as.formula("~Agef + CETSif + Group"), data = MetaDummy)
+
+ADcountList2_Random <- estimateDisp(ADcountList, MarziModelMatrixRandomCell)
+
+fitTMM_Random <- glmQLFit(ADcountList2_Random, MarziModelMatrixRandomCell)
+qlf_group_Random <- glmQLFTest(fitTMM_Random, coef = "GroupAD")
+group_results_Random <- topTags(qlf_group_Random, n = Inf) %>% data.frame() %>% mutate(PeakName = rownames(.)) 
+
+groupResult_Anno_Random <- group_results_Random %>%
+  AnnotDESeqResult(CountAnnoFile = AllCalledData$countsMatrixAnnot, by.x = "PeakName", by.y = "PeakName") %>% arrange(FDR)
+
+
+temp <- merge(group_results_No %>% select(PeakName, logFC, PValue, FDR),
+              group_results_Random %>% select(PeakName, logFC, PValue, FDR),
+              by = "PeakName", suffixes = c("_No", "_Random"))
+
+
+CombinedAll <- merge(AllThreeCombinedSup, temp, by.x = "Geneid", by.y = "PeakName")
+
+
+CorAll <- CombinedAll %>% select(matches("logFC")) %>% cor
+CorAll_CETsSignif  <- CombinedAll %>% filter(FDR_CETs < 0.05) %>% select(matches("logFC")) %>% cor
+
+
 save.image(paste0(ResultsPath, Cohort, ".Rdata"))
-saveRDS(DESeqOutAll_Full@colData, "Data/Metada.Rds")
 saveRDS(groupResult_Anno, file = paste0(ResultsPath, Cohort, "edgeR_CETs.Rds"))
-saveRDS(groupResult_Anno_b, file = paste0(ResultsPath, Cohort, "edgeR_CETs_b.Rds"))
 saveRDS(groupResult_MSPAnno, file = paste0(ResultsPath, Cohort, "edgeR_MSP.Rds"))
 saveRDS(groupResult_MSPAnno_f, file = paste0(ResultsPath, Cohort, "edgeR_MSPneuronAsFactor.Rds"))
+saveRDS(groupResult_Anno_No, file = paste0(ResultsPath, Cohort, "edgeR_NoCellCorretction.Rds"))
+saveRDS(groupResult_Anno_Random, file = paste0(ResultsPath, Cohort, "edgeR_CETsRandom.Rds"))
 closeDev()

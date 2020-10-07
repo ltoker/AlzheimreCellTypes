@@ -7,7 +7,8 @@ packageF("limma")
 packageF("edgeR")
 packageF("Rsubread")
 packageF("cluster")
-ResultsPath = "Results/"
+ResultsPath = "ResultsRerun//"
+packageF("ggpubr")
 
 Metadata <- readRDS("Data/Metada.Rds")
 
@@ -108,19 +109,22 @@ CellTypeResult_Anno <- CellType_results %>%
 
 
 ##### load AD analysis objects ############################
-ResultsMarziCETs <- readRDS("Results/MarziedgeR_CETs.Rds")
-ResultsMarziCETs_b <- readRDS("Results/MarziedgeR_CETs_b.Rds")
-ResultsMarziMSP <- readRDS("Results/MarziedgeR_MSP.Rds")
-ResultsMarziMSPneuronal <- readRDS("Results/MarziedgeR_MSPneuronAsFactor.Rds")
+ResultsMarziCETs <- readRDS(paste0(ResultsPath, "MarziedgeR_CETs.Rds"))
+ResultsMarziMSP <- readRDS(paste0(ResultsPath, "MarziedgeR_MSP.Rds"))
+ResultsMarziMSPneuronal <- readRDS(paste0(ResultsPath, "MarziedgeR_MSPneuronAsFactor.Rds"))
+ResultsMarziNoCellCorrection <- readRDS(paste0(ResultsPath, "MArziedgeR_NoCellCorretction.Rds"))
+ResultsMarziCETsRandom <- readRDS(paste0(ResultsPath, "MarziedgeR_CETsRandom.Rds"))
 
 ###########################################################
 
 SignifCETS <- ResultsMarziCETs %>% filter(FDR < 0.05, !duplicated(PeakName)) %>% select(PeakName, logCPM, logFC, PValue, FDR)
 SignifMSPall <- ResultsMarziMSP %>% filter(FDR < 0.05, !duplicated(PeakName)) %>% select(PeakName, logCPM, logFC, PValue, FDR)
 SignifMSPneuronF <- ResultsMarziMSPneuronal %>% filter(FDR < 0.05, !duplicated(PeakName)) %>% select(PeakName, logCPM, logFC, PValue, FDR)
+SignifNoCorrect <- ResultsMarziNoCellCorrection %>% filter(FDR < 0.05, !duplicated(PeakName)) %>% select(PeakName, logCPM, logFC, PValue, FDR)
+SignifCETsRandom <- ResultsMarziCETsRandom %>% filter(FDR < 0.05, !duplicated(PeakName)) %>% select(PeakName, logCPM, logFC, PValue, FDR)
 
-SignifMarzi <- list(SignifCETS, SignifMSPneuronF, SignifMSPall)
-names(SignifMarzi) <- c("CETs", "MSPneuronF", "MSPall")
+SignifMarzi <- list(SignifNoCorrect, SignifCETsRandom, SignifCETS, SignifMSPneuronF, SignifMSPall)
+names(SignifMarzi) <- c("NoCellCorrection", "CETS_Shuffled",  "CETs", "MSPneuronF", "MSPall")
 
 CellType_resultsSignifMarzi <- sapply(names(SignifMarzi), function(Mod){
   temp <- CellType_results %>% filter(PeakName %in% SignifMarzi[[Mod]]$PeakName)
@@ -138,18 +142,20 @@ CellType_resultsSignifMarzi <- sapply(names(SignifMarzi), function(Mod){
 
 
 CellType_resultsSignifMarzi$DirectictionChange <- factor(CellType_resultsSignifMarzi$DirectictionChange, levels = c("Hypoacetylated", "Hyperacetylated"))
-CellType_resultsSignifMarzi$MethodSignif <- factor(CellType_resultsSignifMarzi$MethodSignif, levels = c("CETs", "MSPneuronF", "MSPall"))
+CellType_resultsSignifMarzi$MethodSignif <- factor(CellType_resultsSignifMarzi$MethodSignif, levels = c("NoCellCorrection", "CETS_Shuffled",  "CETs", "MSPneuronF", "MSPall"))
 
 
 
-AllResults <- rbind((ResultsMarziCETs %>% select(PeakName, logFC, FDR) %>% filter(!duplicated(PeakName)) %>% mutate(Method = "CETs")),
+AllResults <- rbind(ResultsMarziNoCellCorrection %>% select(PeakName, logFC, FDR) %>% filter(!duplicated(PeakName)) %>% mutate(Method = "NoCellCorrection"),
+                    ResultsMarziCETsRandom %>% select(PeakName, logFC, FDR) %>% filter(!duplicated(PeakName)) %>% mutate(Method = "CETS_Shuffled"),
+                    ResultsMarziCETs %>% select(PeakName, logFC, FDR) %>% filter(!duplicated(PeakName)) %>% mutate(Method = "CETs"),
                     ResultsMarziMSPneuronal %>% select(PeakName, logFC, FDR) %>% filter(!duplicated(PeakName)) %>% mutate(Method = "MSPneuronF"),
                     ResultsMarziMSP %>% select(PeakName, logFC, FDR) %>% filter(!duplicated(PeakName)) %>% mutate(Method = "MSPall"))
 
 AllResults <- merge(AllResults, CellType_results %>% select(PeakName, logFC, FDR), by = "PeakName", suffixes = c("_AD", "_Neurons"))
-AllResults$Method <- factor(AllResults$Method, levels = c("CETs", "MSPneuronF", "MSPall"))
+AllResults$Method <- factor(AllResults$Method, levels = c("NoCellCorrection", "CETS_Shuffled",  "CETs", "MSPneuronF", "MSPall"))
 
-CorDF <- data.frame(Method = c("CETs", "MSPneuronF", "MSPall"),
+CorDF <- data.frame(Method = c("NoCellCorrection", "CETS_Shuffled",  "CETs", "MSPneuronF", "MSPall"),
                     x1 = -6, y1 = 2,
                     x2 = -6, y2 = 1.8)
 
@@ -169,30 +175,30 @@ CorDF %<>% mutate(Text2 = paste0("'r'[italic('Significant peaks')] ", "*", "' = 
 
 Plot1 <- ggplot(CellType_resultsSignifMarzi, aes(DirectictionChange, logFC)) +
   theme_classic() +
-  theme(axis.text.x = element_blank(), legend.position = c(0.5,-0.05),
-        legend.direction = "horizontal", legend.background = element_blank()) +
+  theme(axis.text.x = element_blank(),legend.position = c(0.85,0.4),
+        legend.background = element_blank()) +
   labs(x = "", y = "logFC (Neurons vs. Glia)") +
   geom_violin(aes(fill = DirectictionChange)) +
   geom_boxplot(width = 0.2, outlier.shape = NA)+
   #scale_color_manual(values =  c("aquamarine4", "darkorchid4"), name = "") +
   scale_fill_manual(values =  c("darkseagreen", "darkorchid4"), name = "") +
   geom_hline(yintercept = 0, color = "red") +
-  facet_wrap(~MethodSignif)
+  facet_wrap(~MethodSignif, nrow = 2)
 
 Plot2 <- ggplot(AllResults, aes(logFC_Neurons, logFC_AD)) +
   theme_classic() +
-  #theme(legend.position = "top") +
+  theme( legend.position = c(0.5,-0.1),legend.direction = "horizontal", legend.background = element_blank()) +
   labs(x = "logFC (Neurons vs. Glia)") +
-  stat_bin2d(bins = 100) +
-  geom_point(data = AllResults %>% filter(FDR_AD < 0.05), color = "orange", alpha = 0.4) +
+  stat_bin2d(bins = 50) +
+  geom_point(data = AllResults %>% filter(FDR_AD < 0.05), color = "orange", alpha = 0.5) +
   geom_hline(yintercept = 0, color = "white") +
   geom_vline(xintercept = 0, color = "white") +
   geom_text(data = CorDF, aes(x = x1, y = y1, label = Text), parse = T, hjust = 0) +
   geom_text(data = CorDF, aes(x = x2, y = y2, label = Text2), parse = T, hjust = 0) +
-  facet_wrap(~Method)
+  facet_wrap(~Method, nrow = 1)
 
-ggarrange(Plot1, Plot2, nrow = 1, widths = c(1,1.8), heights = c(1.1,1))
-ggsave(paste0("MethodComparison.pdf"), device = "pdf", width = 12, height = 3, dpi = 300, path = ResultsPath, useDingbats = F)
+ggarrange(Plot1, Plot2, nrow = 1, widths = c(1,2.2), heights = c(1,1))
+ggsave(paste0("MethodComparisonAll.pdf"), device = "pdf", width = 14, height = 3, dpi = 300, path = ResultsPath, useDingbats = F)
 
 
 #Get the TMM psudo counts

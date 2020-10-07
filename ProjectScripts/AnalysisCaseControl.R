@@ -10,7 +10,7 @@ packageF("ggpubr")
 packageF("venn")
 packageF("cluster")
 
-ResultsPath = "Results"
+ResultsPath = "ResultsRerun"
 if(!ResultsPath %in% list.dirs(full.names = F, recursive = F)){
   dir.create(ResultsPath)
 }
@@ -260,7 +260,7 @@ VarExplained <- PCAsamples %>% summary() %>% .$importance %>%
 
 
 CovarPvalues <- sapply(grep("^PC", names(countMatrixFullAllCalled$Metadata), value = T), function(PC){
-  temp <- lm(as.formula(paste0(PC, "~ Group + Age + Sex + CETS + NeuNall_MSP + Astrocyte_MSP + Microglia_MSP + Oligo_MSP")),
+  temp <- lm(as.formula(paste0(PC, "~ Group + Age + Sex + CETS + NeuNall_MSP + Astrocyte_MSP + Microglia_MSP + Oligo_MSP + Eno2")),
              data = countMatrixFullAllCalled$Metadata) %>% summary
   temp$coefficients[-1,4]
 }, simplify = F) %>% do.call(cbind, .) %>% data.frame()
@@ -435,13 +435,13 @@ CompareResultsDF$MethodSignif <- factor(CompareResultsDF$MethodSignif, levels = 
 #Combijne all four together
 
 
-temp <- merge(group_resultsMSP_f %>% select(PeakName, logFC, FDR),
-              group_resultsMSP %>% select(PeakName, logFC, FDR),
+temp <- merge(group_resultsMSP_f %>% select(PeakName, logFC, PValue, FDR),
+              group_resultsMSP %>% select(PeakName, logFC, PValue, FDR),
               by = "PeakName", suffixes = c("_MSPneuronF", "_MSPall"))
 
 
-AllThreeCombinedSup <- merge(group_results %>% select(PeakName, logFC, FDR), temp, by = "PeakName")
-names(AllThreeCombinedSup)[names(AllThreeCombinedSup) %in% c("logFC", "FDR")] <- paste0(names(AllThreeCombinedSup)[names(AllThreeCombinedSup) %in% c("logFC", "FDR")], "_CETs")
+AllThreeCombinedSup <- merge(group_results %>% select(PeakName, logFC, PValue, FDR), temp, by = "PeakName")
+names(AllThreeCombinedSup)[names(AllThreeCombinedSup) %in% c("logFC", "PValue", "FDR")] <- paste0(names(AllThreeCombinedSup)[names(AllThreeCombinedSup) %in% c("logFC", "PValue", "FDR")], "_CETs")
 
 AllThreeCombined <- pivot_longer(AllThreeCombinedSup, col = -matches("PeakName|_CETs"),
                       names_to = c(".value", "Method"), names_pattern = "(.*)_(.*)") %>% data.frame()
@@ -480,7 +480,7 @@ CorDF %<>% mutate(Text = paste0("'r'[italic('All peaks')] ", "*", "' = '", "*", 
 CorDF %<>% mutate(Text2 = paste0("'r'[italic('CETs significant peaks')] ", "*", "' = '", "*", CorSignif))
 
 ggplot(AllThreeCombined, aes(logFC_CETs, logFC)) +
-  theme_minimal() +
+  theme_classic() +
   theme(legend.background = element_blank()) +
   labs(x = "logFC_AD (CETs)", y = "logFC_AD (MSP)") +
   geom_bin2d(bins = 100) +
@@ -494,10 +494,9 @@ ggplot(AllThreeCombined, aes(logFC_CETs, logFC)) +
   geom_vline(xintercept = 0) +
   geom_text(data = CorDF, aes(x = x1, y = y1, label = Text), parse = T, hjust = 0) +
   geom_text(data = CorDF, aes(x = x2, y = y2, label = Text2), parse = T, hjust = 0) +
-  facet_wrap(~Method, ncol = 3)
+  facet_wrap(~Method, ncol = 2)
 
-
-
+ggsave(paste0("MethodComparison2.pdf"), device = "pdf", width = 12, height = 4, dpi = 300, path = ResultsPath, useDingbats = F)
 
 VennData <- AllThreeCombined %>% filter(MethodSignif != "NS")  %>%  select(FDR_CETs, FDR, Method, PeakName)
 VennData$Signif_CETs <- sapply(VennData$FDR_CETs, function(x){
@@ -535,12 +534,12 @@ UniquePeakMSP <- SignifMSP %>% filter(!PeakName %in% SignifCETS$PeakName)
 UniquePeakMSP <- groupResult_MSPAnno %>% filter(PeakName %in% UniquePeakMSP$PeakName) %>% select(PeakName, logFC, logCPM, PValue, FDR, symbol, Peak_Gene, GeneAnnoType, Peak.width, Peak.Location)
 
 UniquePeakCETS <- SignifCETS %>% filter(!PeakName %in% SignifMSP$PeakName)
-AllThreeCombinedSup
 
-AllThreeCombinedSup <- merge(HTseqCounts %>% select(Geneid, CHR, START, END), AllThreeCombinedSup %>% filter(FDR_CETs < 0.05 | FDR_MSPneuronF < 0.05 | FDR_MSPall < 0.05),
+
+AllThreeCombinedSup <- merge(HTseqCounts %>% select(Geneid, CHR, START, END), AllThreeCombinedSup,
                              by.x = "Geneid", by.y = "PeakName") %>% data.frame %>% arrange(FDR_CETs)
 
-write.table(AllThreeCombinedSup, "Results/AllThreeCombinedSup.tsv", row.names = F, col.names = T, sep = "\t")
+write.table(AllThreeCombinedSup, paste0(ResultsPath, "Supplementary tableS1.tsv"), row.names = F, col.names = T, sep = "\t")
 
 
 save.image(paste0(ResultsPath, Cohort, ".Rdata"))

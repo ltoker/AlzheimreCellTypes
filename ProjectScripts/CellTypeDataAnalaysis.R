@@ -172,11 +172,13 @@ CorDF$CorSignif <- sapply(CorDF$Method, function(method){
 CorDF %<>% mutate(Text = paste0("'r'[italic('All peaks')] ", "*", "' = '", CorAll))
 CorDF %<>% mutate(Text2 = paste0("'r'[italic('Significant peaks')] ", "*", "' = '", CorSignif))
 
+packageF("GGally")
 
 Plot1 <- ggplot(CellType_resultsSignifMarzi, aes(DirectictionChange, logFC)) +
   theme_classic() +
   theme(axis.text.x = element_blank(),legend.position = c(0.85,0.4),
-        legend.background = element_blank()) +
+  #theme(axis.text.x = element_blank(),legend.position = "bottom",
+         legend.background = element_blank()) +
   labs(x = "", y = "logFC (Neurons vs. Glia)") +
   geom_violin(aes(fill = DirectictionChange)) +
   geom_boxplot(width = 0.2, outlier.shape = NA)+
@@ -185,20 +187,39 @@ Plot1 <- ggplot(CellType_resultsSignifMarzi, aes(DirectictionChange, logFC)) +
   geom_hline(yintercept = 0, color = "red") +
   facet_wrap(~MethodSignif, nrow = 2)
 
-Plot2 <- ggplot(AllResults, aes(logFC_Neurons, logFC_AD)) +
+# Plot2 <- ggplot(AllResults, aes(logFC_Neurons, logFC_AD)) +
+#   theme_classic() +
+#   theme( legend.position = c(0.5,-0.1),legend.direction = "horizontal", legend.background = element_blank()) +
+#   labs(x = "logFC (Neurons vs. Glia)") +
+#   stat_bin2d(bins = 50) +
+#   #geom_point(data = AllResults %>% filter(FDR_AD < 0.05), color = "orange", alpha = 0.5) +
+#   stat_contour_filled(data = AllResults %>% filter(FDR_AD < 0.05), aes_string(logFC_Neurons, logFC_AD,z = after_stat(density))) +
+#   scale_fill_gradient(low = "orange", high = "white") +
+#   geom_hline(yintercept = 0, color = "white") +
+#   geom_vline(xintercept = 0, color = "white") +
+#   geom_text(data = CorDF, aes(x = x1, y = y1, label = Text), parse = T, hjust = 0) +
+#   geom_text(data = CorDF, aes(x = x2, y = y2, label = Text2), parse = T, hjust = 0) +
+#   facet_wrap(~Method, nrow = 1)
+
+AllResults$Direction <- AllResults$logFC_AD
+AllResults$Direction[AllResults$FDR_AD > 0.05] <- "NS"
+AllResults$Direction[AllResults$FDR_AD < 0.05 & AllResults$logFC_AD < 0] <- "Down"
+AllResults$Direction[AllResults$FDR_AD < 0.05 & AllResults$logFC_AD > 0] <- "Up"
+
+
+Plot2 <- ggally_density(AllResults, aes_string("logFC_Neurons", "logFC_AD", fill = "..level..", color = "Direction", group = "Direction")) +
   theme_classic() +
-  theme( legend.position = c(0.5,-0.1),legend.direction = "horizontal", legend.background = element_blank()) +
-  labs(x = "logFC (Neurons vs. Glia)") +
-  stat_bin2d(bins = 50) +
-  geom_point(data = AllResults %>% filter(FDR_AD < 0.05), color = "orange", alpha = 0.5) +
-  geom_hline(yintercept = 0, color = "white") +
-  geom_vline(xintercept = 0, color = "white") +
+  theme(legend.position = "none") +
+  labs(x = "logFC (Neurons vs. Glia)", y = "logFC_AD") +
+  scale_color_manual(values = c("orange", "white", "orange")) +
+  geom_hline(yintercept = 0, color = "red") +
+  geom_vline(xintercept = 0, color = "red") +
   geom_text(data = CorDF, aes(x = x1, y = y1, label = Text), parse = T, hjust = 0) +
   geom_text(data = CorDF, aes(x = x2, y = y2, label = Text2), parse = T, hjust = 0) +
   facet_wrap(~Method, nrow = 1)
 
-ggarrange(Plot1, Plot2, nrow = 1, widths = c(1,2.2), heights = c(1,1))
-ggsave(paste0("MethodComparisonAll.pdf"), device = "pdf", width = 14, height = 3, dpi = 300, path = ResultsPath, useDingbats = F)
+Plot3 <- ggarrange(Plot1, Plot2, nrow = 1, widths = c(1,2.2), heights = c(1,1))
+ggsave(paste0("MethodComparisonAll_new.pdf"), Plot3, device = "pdf", width = 14, height = 3, dpi = 300, path = ResultsPath, useDingbats = F)
 
 
 #Get the TMM psudo counts

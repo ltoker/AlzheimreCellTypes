@@ -524,6 +524,8 @@ pdf(paste0(ResultsPath,"VennDiagram.pdf"),width = 6, height = 4.5, useDingbats =
 venn(VennData  %>% select(matches("Signif")), box = F, opacity = 0.4, ilcs = 1.5, ilabels = T, zcolor = "style")
 closeDev()
 
+
+
 #Find Overlaps
 SignifCETS <- group_results %>% filter(FDR < 0.05)
 SignifMSP <- group_resultsMSP %>% filter(FDR < 0.05)
@@ -580,9 +582,73 @@ temp <- merge(group_results_No %>% select(PeakName, logFC, PValue, FDR),
 
 
 CombinedAll <- merge(AllThreeCombinedSup, temp, by.x = "Geneid", by.y = "PeakName")
+CombinedAll$CETs_Signif <- sapply(CombinedAll$FDR_CETs, function(x){
+  if(x < 0.05){
+    "CETs_Signif"
+  } else {
+    "CETS_NS"
+  }
+})
+
+CombinedAll %<>% mutate(Direction = CETs_Signif)
+CombinedAll$Direction[CombinedAll$logFC_CETs < 0 & CombinedAll$FDR_CETs < 0.05] <- "Down"
+CombinedAll$Direction[CombinedAll$logFC_CETs > 0 & CombinedAll$FDR_CETs < 0.05] <- "Up"
 
 
-CorAll <- CombinedAll %>% select(matches("logFC")) %>% cor
+packageF("GGally")
+
+CombinedAll_toPlot <- CombinedAll %>% select(logFC_CETs, logFC_No, logFC_Random,
+                                             logFC_MSPneuronF, logFC_MSPall, CETs_Signif, Direction)
+
+CombinedAll_Sub <- rbind(CombinedAll_toPlot %>% filter(CETs_Signif == "CETs_Signif"), CombinedAll_toPlot %>% filter(CETs_Signif == "CETS_NS") %>%
+                           .[sample(1:nrow(.), 10000, replace = F),]) 
+
+
+
+Matrix <- ggpairs(CombinedAll_toPlot, columns = grep("logFC", names(CombinedAll_toPlot)),
+                  lower = list(continuous = "density", mapping = aes_string(fill = "..level..", group = "Direction")),
+                  upper = list(continuos = ggally_cor,  mapping = aes_string(color = "CETs_Signif")),
+                  diag = list(continuous = "blankDiag")) +
+  theme_bw() +
+  theme(panel.grid = element_blank(), legend.position = "bottom")
+
+for(j in 1:4){
+  for(i in (j+1):5){
+    Matrix[i,j] <- Matrix[i,j] +
+      geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red")
+  }
+}
+
+
+
+Matrix2 <- ggpairs(CombinedAll_toPlot %>% filter(CETs_Signif == "CETs_Signif"), columns = grep("logFC", names(CombinedAll_toPlot)),
+                  lower = list(continuous = wrap("density"), mapping = aes_string(alpha = "..level..", group = "Direction")),
+                  upper = list(continuos = wrap(ggally_cor),  mapping = aes_string(color = "CETs_Signif")),
+                  diag = list(continuous = "blankDiag")) +
+  theme_bw() +
+  theme(panel.grid = element_blank()) 
+
+for(j in 1:4){
+  for(i in (j+1):5){
+    Matrix2[i,j] <- Matrix2[i,j] +
+      scale_fill_gradient(low = "orange", high = "white")
+  }
+}
+
+Matrix3 <- Matrix2
+
+for(j in 1:4){
+  for(i in (j+1):5){
+    Matrix3[i,j] <- Matrix3[i,j] +
+      Matrix2[i,j]
+  }
+}
+
+ggsave(paste0("MethodComparisonAll_EachOther.pdf"), Matrix, device = "pdf", width = 12, height = 6, dpi = 300, path = ResultsPath, useDingbats = F)
+ggsave(paste0("MethodComparisonAll_EachOther_SignifOnly.pdf"), Matrix2, device = "pdf", width = 12, height = 6, dpi = 300, path = ResultsPath, useDingbats = F)
+
+
+CorAll_ns <- CombinedAll %>%  filter(FDR_CETs >= 0.05) %>%  select(matches("logFC")) %>% cor
 CorAll_CETsSignif  <- CombinedAll %>% filter(FDR_CETs < 0.05) %>% select(matches("logFC")) %>% cor
 
 

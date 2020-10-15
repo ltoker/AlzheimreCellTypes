@@ -541,9 +541,6 @@ UniquePeakCETS <- SignifCETS %>% filter(!PeakName %in% SignifMSP$PeakName)
 AllThreeCombinedSup <- merge(HTseqCounts %>% select(Geneid, CHR, START, END), AllThreeCombinedSup,
                              by.x = "Geneid", by.y = "PeakName") %>% data.frame %>% arrange(FDR_CETs)
 
-write.table(AllThreeCombinedSup, paste0(ResultsPath, "Supplementary tableS1.tsv"), row.names = F, col.names = T, sep = "\t")
-
-
 #Run without cell correction
 MarziModelMatrixNoCell <- model.matrix(as.formula("~Agef + Group"), data = countMatrixFullAllCalled$Metadata)
 
@@ -578,10 +575,13 @@ groupResult_Anno_Random <- group_results_Random %>%
 
 temp <- merge(group_results_No %>% select(PeakName, logFC, PValue, FDR),
               group_results_Random %>% select(PeakName, logFC, PValue, FDR),
-              by = "PeakName", suffixes = c("_No", "_Random"))
+              by = "PeakName", suffixes = c("_NoCellAdjustment", "_Shuffled"))
 
 
 CombinedAll <- merge(AllThreeCombinedSup, temp, by.x = "Geneid", by.y = "PeakName")
+write.table(CombinedAll, paste0(ResultsPath, "Supplementary tableS1.tsv"), row.names = F, col.names = T, sep = "\t")
+
+
 CombinedAll$CETs_Signif <- sapply(CombinedAll$FDR_CETs, function(x){
   if(x < 0.05){
     "CETs_Signif"
@@ -593,6 +593,7 @@ CombinedAll$CETs_Signif <- sapply(CombinedAll$FDR_CETs, function(x){
 CombinedAll %<>% mutate(Direction = CETs_Signif)
 CombinedAll$Direction[CombinedAll$logFC_CETs < 0 & CombinedAll$FDR_CETs < 0.05] <- "Down"
 CombinedAll$Direction[CombinedAll$logFC_CETs > 0 & CombinedAll$FDR_CETs < 0.05] <- "Up"
+
 
 
 packageF("GGally")
